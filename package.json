@@ -1,0 +1,21 @@
+{
+  "name": "jersey-city-perspective",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "fetch:osm": "node scripts/fetch-osm.mjs",
+    "fetch:overture": "sh scripts/fetch-overture.sh",
+    "build:data": "node scripts/build-data.mjs"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "polygon-clipping": "^0.15.7",
+    "vite": "^8.3.4"
+  }
+}

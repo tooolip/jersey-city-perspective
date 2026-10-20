@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jersey City Walk</title>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <div id="loading">
+      <h1>Downtown Jersey City</h1>
+      <p id="loading-status">Starting…</p>
+    </div>
+
+    <div id="overlay" class="hidden">
+      <div class="card">
+        <h1>Downtown Jersey City</h1>
+        <p class="sub">Turnpike to the Hudson · Columbus Drive to 12th Street</p>
+        <p class="cta">Click to walk</p>
+        <div class="cols">
+          <ul class="keys">
+            <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · mouse to look</li>
+            <li><kbd>Shift</kbd> run · <kbd>Space</kbd> jump</li>
+            <li><kbd>F</kbd> toggle fly · <kbd>E</kbd>/<kbd>Q</kbd> up/down</li>
+            <li><kbd>M</kbd> map (click it to teleport)</li>
+            <li><kbd>Esc</kbd> release mouse</li>
+          </ul>
+          <ul id="places" class="keys"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div id="hud">
+      <div id="street">—</div>
+      <div id="coords"></div>
+      <div id="mode">Walking</div>
+    </div>
+    <canvas id="minimap" width="220" height="220"></canvas>
+    <div id="fps"></div>
+    <div id="credits">Buildings © Overture Maps (USGS LiDAR heights) · Streets © OpenStreetMap contributors</div>
+
+    <div id="bigmap-wrap" class="hidden">
+      <canvas id="bigmap"></canvas>
+      <p>Click anywhere to teleport · <kbd>M</kbd> or <kbd>Esc</kbd> to close</p>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
