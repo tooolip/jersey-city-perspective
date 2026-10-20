@@ -48,11 +48,17 @@ Every feature should trace back to a data source, and estimates should be flagge
   as cylinders, merging the NYC 2017 survey where it's denser, and newer LiDAR when USGS publishes
   a post-2014 Hudson County survey.
 
-### M4: Facade truth
-- Facade colours from street-level imagery (Mapillary), sampled per building and flagged by confidence.
-- Era-appropriate facade kits by year built and type: Italianate brownstone, brick rowhouse,
-  converted warehouse, curtain-wall tower. Proportions come from lot frontage and storey heights.
-- Hand-modelled landmarks: Colgate Clock, Newport Centre, PATH headhouses, churches.
+### M4: Facade truth (done, first pass)
+- Facade colours sampled from Mapillary photos via camera poses, with occlusion, angle and
+  consensus checks. Measured on ~120 buildings, photo-guided on ~370.
+- Era/type facade kits (rowhouse, frame, warehouse, mid-century, modern, glass) with storefront
+  ground floors, cornices and inferred stoops. Bays come from lot frontage.
+- Still open:
+  - better colour coverage: leaf-on and summer photos, 1024 px thumbnails, per-facade colours
+    for corner buildings;
+  - bay windows and oriels (visible in LiDAR as facade bumps);
+  - real door positions (address points / photos);
+  - hand-modelled landmarks: Colgate Clock, Newport Centre, PATH headhouses, churches.
 
 ### M5: Art direction
 - Pick a rendering style and apply it consistently (materials, lighting, post-processing).

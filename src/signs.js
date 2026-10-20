@@ -1,12 +1,11 @@
 import * as THREE from 'three';
 import { ground } from './builders.js';
 
-// Storefront fascia signs with the business's real name, plus ground-floor glazing beneath.
+// Storefront fascia signs with the business's real name.
 // Chains use their known brand colours; others get a generic colour by kind (flagged as such).
 
 const SIGN_H = 0.75; // m
 const SIGN_BOTTOM = 2.9; // m above the sidewalk
-const GLAZING_TOP = 2.75;
 
 const KIND_STYLE = {
   food: ['#7a1f1f', '#f6e7c8'],
@@ -118,13 +117,8 @@ export function buildSigns(signs, renderer) {
     group.add(mesh);
   }
 
-  // Sign boards (depth) and storefront glazing, instanced.
-  const boardGeo = new THREE.BoxGeometry(1, 1, 1);
-  const boards = new THREE.InstancedMesh(boardGeo, new THREE.MeshStandardMaterial({ roughness: 0.7 }), signs.length);
-  const glassGeo = new THREE.PlaneGeometry(1, 1);
-  const glazing = new THREE.InstancedMesh(glassGeo, new THREE.MeshStandardMaterial({ color: '#1d262d', roughness: 0.12, metalness: 0.6 }), signs.length);
-  const frameGeo = new THREE.BoxGeometry(1, 1, 1);
-  const frames = new THREE.InstancedMesh(frameGeo, new THREE.MeshStandardMaterial({ color: '#2a2a2a', roughness: 0.6 }), signs.length);
+  // Sign boards (depth). Shopfront glazing comes from the storefront facade kit.
+  const boards = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.7 }), signs.length);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0), c = new THREE.Color();
   signs.forEach((s, i) => {
@@ -133,17 +127,9 @@ export function buildSigns(signs, renderer) {
     m.compose(p.set(s.x + s.nx * 0.045, g0 + SIGN_BOTTOM + SIGN_H / 2, -(s.y + s.ny * 0.045)), q, sc.set(s.w + 0.06, SIGN_H + 0.06, 0.09));
     boards.setMatrixAt(i, m);
     boards.setColorAt(i, c.set(signStyle(s).bg));
-    const gw = s.w + 0.6;
-    m.compose(p.set(s.x + s.nx * 0.03, g0 + 0.35 + (GLAZING_TOP - 0.35) / 2, -(s.y + s.ny * 0.03)), q, sc.set(gw, GLAZING_TOP - 0.35, 1));
-    glazing.setMatrixAt(i, m);
-    m.compose(p.set(s.x + s.nx * 0.02, g0 + 0.35 + (GLAZING_TOP - 0.35) / 2, -(s.y + s.ny * 0.02)), q, sc.set(gw + 0.25, GLAZING_TOP - 0.2, 0.04));
-    frames.setMatrixAt(i, m);
   });
-  for (const mesh of [boards, glazing, frames]) {
-    mesh.castShadow = mesh === boards;
-    mesh.receiveShadow = true;
-    mesh.computeBoundingSphere();
-  }
-  group.add(frames, glazing, boards);
+  boards.castShadow = boards.receiveShadow = true;
+  boards.computeBoundingSphere();
+  group.add(boards);
   return group;
 }

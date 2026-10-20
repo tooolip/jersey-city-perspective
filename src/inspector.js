@@ -124,7 +124,16 @@ export class Inspector {
     if (tax.cls) rows.push(row('Use', esc(PROP_CLASS[tax.cls] || tax.cls), 'Tax record'));
     if (tax.lotSize) rows.push(row('Lot', `${esc(tax.lotSize)} ft`, `Block/Lot ${esc(tax.bl)}`));
     if (b.rc) rows.push(row('Roof colour', `<span class="swatch" style="background:${b.rc}"></span>${b.rc}`, 'NAIP 2023 aerial photo'));
-    rows.push(row('Facade colour', b.fc ? esc(b.fc) : 'not in data yet', b.fc ? 'Mapped' : 'Palette from material/era'));
+    const KIT = { rowhouse: 'Brick / brownstone rowhouse', frame: 'Frame house with siding', warehouse: 'Masonry warehouse / loft', midcentury: 'Mid-century apartment block', modern: 'Post-1990 mid-rise', glass: 'Curtain-wall tower' };
+    if (b.kit) rows.push(row('Facade kit', KIT[b.kit], 'Inferred from year, storeys, material, use'));
+    if (b.bay) rows.push(row('Window bays', `${b.bay.toFixed(2)} m apart`, b.tax?.lotSize && ['rowhouse', 'frame'].includes(b.kit) ? 'From recorded lot frontage' : 'Typical for kit'));
+    const extras = [b.shop && 'storefront ground floor', b.cornice && 'cornice', b.stoop && 'stoop'].filter(Boolean);
+    if (extras.length) rows.push(row('Details', extras.join(', '), b.shop ? 'Storefront: businesses/commercial use; others inferred from era' : 'Inferred from era and type'));
+    const swatch = (c) => `<span class="swatch" style="background:${c}"></span>${c}`;
+    if (b.fcs?.conf === 'agree') rows.push(row('Facade colour', swatch(b.fc), `Measured: ${b.fcs.n} of ${b.fcs.of} street photos agree (${b.fcs.yr})`));
+    else if (b.fcs?.conf === 'single') rows.push(row('Facade colour', `palette shade nearest ${swatch(b.fcs.c)}`, `Guided by 1 street photo (${b.fcs.yr})`));
+    else if (b.fcs) rows.push(row('Facade colour', 'palette', `${b.fcs.of} street photos disagree (${b.fcs.yr})`));
+    else rows.push(row('Facade colour', b.fc ? swatch(b.fc) : 'palette', b.fc ? 'Mapped (OSM/Overture)' : 'No usable street photo; palette from material/era'));
 
     const signs = this.signsByBuilding.get(b) || [];
     const biz = signs.map((s) => {

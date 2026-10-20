@@ -8,6 +8,7 @@ import { loadImagery, sampleRoofColours } from './lib/roof-colours.mjs';
 import { collectBusinesses, placeSigns } from './lib/signs.mjs';
 import { buildStreetFurniture } from './lib/street.mjs';
 import { loadLidar, buildTerrain } from './lib/lidar.mjs';
+import { annotateFacades } from './lib/facades.mjs';
 import { segIntersect, pointInRing, distToSeg, distToRing, toPts, bbox, centroid, ringArea, openRing, assembleRings, Grid } from './lib/geom.mjs';
 
 const ORIGIN = { lat: 40.724, lon: -74.042 };
@@ -43,6 +44,7 @@ const places = (await optional('data/raw/overture_places.geojson'))?.features ||
 const imagery = await loadImagery();
 const mapillary = (await optional('data/raw/mapillary_features.json')) || [];
 const lidar = await loadLidar();
+const photoColours = (await optional('data/derived/facades.json')) || {};
 if (!lidar) console.warn('(missing data/derived LiDAR products; run scripts/fetch-lidar.py + process-lidar.py)');
 if (!imagery) console.warn('(missing data/raw/naip.rgb; run scripts/fetch-imagery.py)');
 
@@ -444,6 +446,11 @@ if (lidar) {
 const businesses = collectBusinesses(osmPois, places, proj).filter((b) => inScope(b.p, 60));
 const { signs, skipped: signsSkipped } = placeSigns(businesses, buildings, roads);
 
+// ---------------------------------------------------------------- facade kits & colours
+// (needs building ids, which are assigned just before writing; use the Overture ids now)
+for (const b of buildings) b.id = b._id.replace(/-/g, '').slice(0, 12);
+const facadeStats = annotateFacades(buildings, roads, { signs, photoColours });
+
 // ---------------------------------------------------------------- street furniture
 const street = buildStreetFurniture({ mapillary, osmPois, proj, inScope, buildings, roads: [...roads, ...paths] });
 const furniture = street.items;
@@ -467,6 +474,7 @@ const city = {
       imagery ? `Roof colours: USDA NAIP ${imagery.date} aerial photo (30 cm, public domain)` : null,
       'Additional business names: Overture Maps places (CDLA-Permissive-2.0)',
       lidar ? `Terrain, trees, roof levels: USGS 3DEP LiDAR (${lidar.dtm.dataset}), trees checked against NAIP ${lidar.trees.ndvi_year} infrared` : null,
+      Object.keys(photoColours).length ? 'Facade colours: sampled from Mapillary street-level photos (CC-BY-SA)' : null,
       mapillary.length ? 'Street furniture & traffic signs: Mapillary map features (CC-BY-SA), positions triangulated from street-level photos' : null,
     ].filter(Boolean),
     contextMeters: CONTEXT_M,
@@ -492,7 +500,9 @@ const city = {
   furniture,
 };
 
-for (const b of [...buildings, ...skyline]) delete b._id;
+// Short stable id (from the Overture id) for joining per-building products like facade colours.
+for (const b of buildings) delete b._id;
+for (const b of skyline) delete b._id;
 await mkdir('public/data', { recursive: true });
 const json = JSON.stringify(city);
 await writeFile('public/data/city.json', json);
@@ -508,4 +518,5 @@ const fk = furniture.reduce((a, f) => ((a[f.k] = (a[f.k] || 0) + 1), a), {});
 console.log(`furniture ${furniture.length} (mapillary ${street.fromMly}, osm ${street.fromOsm}, sign posts ${street.posts}), generated lamps ${lamps.length / 2}`);
 console.log('  ' + Object.entries(fk).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', '));
 if (lidar) console.log(`LiDAR: terrain ${terrain.w}x${terrain.h} @${terrain.res}m, trees ${lidarTrees.length / 5} (+${trees.length / 2} generated outside), roofs with parts ${lidarRoofs}, not in 2014 scan ${lidarAbsent}, embankment heights ${areas.filter((a) => a.emb).map((a) => a.emb).join('/')}`);
+console.log(`facades: kits ${Object.entries(facadeStats.kits).map(([k, v]) => `${k} ${v}`).join(', ')}; storefronts ${facadeStats.shops}, cornices ${facadeStats.cornices}, stoops ${facadeStats.stoops}, photo colours ${facadeStats.photo} (+${facadeStats.guided || 0} photo-guided)`);
 console.log(`boundary ${boundary.length} pts; wrote public/data/city.json (${(json.length / 1e6).toFixed(2)} MB)`);

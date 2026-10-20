@@ -35,7 +35,7 @@ The browser loads one pre-built file, `public/data/city.json`, with everything i
 
 ```bash
 # One-time Python setup (Overture CLI + raster tools)
-python3 -m venv .venv && .venv/bin/pip install overturemaps rasterio numpy scipy shapely "laspy[lazrs]"
+python3 -m venv .venv && .venv/bin/pip install overturemaps rasterio numpy scipy shapely pillow "laspy[lazrs]"
 
 npm run fetch:osm       # OpenStreetMap: streets, rail, parks, water, businesses, street furniture
 npm run fetch:overture  # Overture buildings (+ Manhattan) and places
@@ -44,6 +44,8 @@ npm run fetch:imagery   # USDA NAIP 2023 30 cm aerial photo (~250 MB)
 npm run fetch:mapillary # Mapillary traffic signs + street objects (needs MAPILLARY_TOKEN)
 npm run fetch:lidar     # USGS LiDAR point cloud, streamed into height grids (~36M points)
 npm run process:lidar   # -> terrain, trees, roof levels in data/derived/
+npm run build:data      # first pass (facade sampling reads the built scene)
+npm run fetch:facades   # facade colours from Mapillary street photos -> data/derived/facades.json
 npm run build:data      # -> public/data/city.json
 ```
 
@@ -106,11 +108,34 @@ Raw downloads go in `data/raw/` (git-ignored).
 - Elevated roads (OSM `bridge`/`layer`) are raised 6.5 m per layer, with pillars, and ramp down
   where they meet ground-level streets. Tunnels are skipped.
 - The Sixth Street (Harsimus Stem) Embankment is raised into 7.5 m stone blocks with trees on top.
-- Window rows follow the recorded storey count when it agrees with the measured height.
-  Measured buildings here average 3.9 m per storey, so storey-only estimates use 3.75 m plus a parapet.
-- Facade palettes follow the recorded construction and era: brick or brownstone, frame siding,
-  concrete. Buildings 40 m and taller, or post-2000 and 25 m and taller, get curtain-wall glass.
-  Exact facade colours aren't in any dataset yet (see [ROADMAP.md](ROADMAP.md)).
+- **Facade kits** by era and type, from tax records:
+  - rowhouse: masonry before 1940;
+  - frame: wood frame with siding;
+  - warehouse: industrial, or large masonry before 1940;
+  - mid-century: 1940–89 and 4+ storeys;
+  - modern: 1990 or later;
+  - glass: towers.
+
+  Each kit has its own ground-floor and upper-floor storey design, from one atlas (`src/facade-atlas.js`).
+  - Window rows follow the recorded storey count. Rowhouse window bays come from the recorded lot
+    frontage: a 20 ft lot gets 3 bays.
+  - Buildings with businesses or commercial use get a storefront ground floor.
+  - Pre-1940 street facades get a cornice.
+  - Stoops: pre-1910 brick rowhouses get one to the parlour floor, at the door bay. Stoops are
+    *inferred* from era and type. The door side alternates by lot number, which produces the
+    mirrored pairs common here, but it's not observed.
+- **Facade colours** come from Mapillary street photos (`scripts/fetch-facade-colours.py`):
+  - *Method:* each street-facing facade is projected into the photos that face it, using the
+    photo's computed camera pose. Points on the 2nd–3rd floors are sampled, skipping sightlines
+    blocked by buildings or tree crowns, grazing views, busy patches (branches, signs) and
+    sky/glass pixels. Each photo's exposure is normalised against the road, and the wall's
+    dominant colour is taken.
+  - *Use:* when 2+ photos agree (~120 buildings) the colour is used as measured. A single photo
+    (~370) only picks the closest shade in the material palette. Photos that disagree are ignored.
+  - *Caveat:* most photos are leaf-off winter captures from 2019, so coverage is partial and
+    colours carry overcast lighting.
+- Otherwise the facade palette follows the recorded construction and era: brick or brownstone,
+  frame siding, concrete.
 
 ## Code layout
 
@@ -122,6 +147,7 @@ scripts/fetch-imagery.py    NAIP aerial photo download (windowed read, reproject
 scripts/fetch-mapillary.mjs Mapillary map features download (tiled)
 scripts/fetch-lidar.py      LiDAR (Entwine Point Tiles) streamed into ground/surface grids
 scripts/process-lidar.py    Terrain, tree detection (+ NDVI check), roof-level parts
+scripts/fetch-facade-colours.py  Facade colours sampled from Mapillary photos
 scripts/build-data.mjs      Projection, boundary, clipping, land/water, generated trees & lamps
 scripts/lib/                Parcel join, roof colours, storefront signs, street furniture, geometry
 src/main.js                 Renderer, sky/sun/shadows, HUD, landmarks, main loop
@@ -129,7 +155,8 @@ src/world.js                Builds the scene from city.json; collision & street-
 src/builders.js             Mesh builders: buildings, ground areas, roads, rails, water, seawall
 src/terrain.js              Terrain height sampling and draping of ground layers
 src/props.js                Instanced trees (LiDAR-measured and generated) and street lamps
-src/signs.js                Storefront signs (text atlases, brand colours) and glazing
+src/signs.js                Storefront signs (text atlases, brand colours)
+src/facade-atlas.js         Facade kit atlas + shader (per-storey rows, wall tint mask)
 src/furniture.js            Street furniture models, traffic-sign faces, road decals
 src/inspector.js            Building / street-object inspector panel
 src/textures.js             Procedural facade textures

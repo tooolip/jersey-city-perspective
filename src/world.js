@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { toPts, bbox, pointInRing, distToRing, distToSeg, Grid } from './geo.js';
 import { buildBuildings, buildEmbankment, buildLaneMarkings, buildFlatAreas, buildSeawall, buildRibbons, buildCrosswalks, buildRails, buildWater, Y, setTerrain } from './builders.js';
-import { masonryTexture, glassTexture } from './textures.js';
+import { facadeAtlas } from './facade-atlas.js';
 import { buildTrees, buildMeasuredTrees, buildLamps } from './props.js';
 import { buildSigns } from './signs.js';
 import { buildFurniture } from './furniture.js';
@@ -26,8 +26,7 @@ const c = (hex) => {
 export function buildWorld(data, renderer, terrain) {
   setTerrain(terrain);
   const root = new THREE.Group();
-  const masonryMap = masonryTexture(renderer);
-  const glassMap = glassTexture(renderer);
+  const atlas = facadeAtlas(renderer);
 
   const water = buildWater(renderer);
   root.add(water);
@@ -71,10 +70,10 @@ export function buildWorld(data, renderer, terrain) {
   root.add(buildLaneMarkings(data.roads));
   root.add(buildRails(data.rails));
 
-  const city = buildBuildings(data.buildings, { masonryMap, glassMap });
+  const city = buildBuildings(data.buildings, { atlas });
   city.name = 'jersey-city';
   root.add(city);
-  const skyline = buildBuildings(data.skyline, { masonryMap, glassMap });
+  const skyline = buildBuildings(data.skyline, { atlas, legacyKits: true });
   skyline.name = 'manhattan';
   skyline.traverse((o) => { o.castShadow = false; });
   root.add(skyline);

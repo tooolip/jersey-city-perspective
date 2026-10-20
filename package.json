@@ -14,6 +14,7 @@
     "fetch:mapillary": "node scripts/fetch-mapillary.mjs",
     "fetch:lidar": ".venv/bin/python -I scripts/fetch-lidar.py",
     "process:lidar": ".venv/bin/python -I scripts/process-lidar.py",
+    "fetch:facades": ".venv/bin/python -I scripts/fetch-facade-colours.py",
     "build:data": "node scripts/build-data.mjs"
   },
   "dependencies": {

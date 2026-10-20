@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { toPts, orient, hash01 } from './geo.js';
 import { Terrain, drape } from './terrain.js';
+import { KIT_ROWS, facadeMaterial } from './facade-atlas.js';
 
 export const BAY_M = 3.2; // window bay width
 export const FLOOR_M = 3.4; // storey height
-const TILE = 4; // bays/floors per texture tile
 
 // Layer heights above the ground for coplanar features (logarithmic depth buffer keeps these
 // stable). Draped layers need a little more separation to absorb interpolation differences.
@@ -21,17 +21,35 @@ const minGround = (ring) => ring.reduce((m, p) => Math.min(m, T.height(p[0], p[1
 
 // Accumulates non-indexed triangles.
 class GeoBuffer {
-  constructor({ uv = false, color = true } = {}) {
+  constructor({ uv = false, color = true, kit = false } = {}) {
     this.pos = [];
     this.nrm = [];
     this.uv = uv ? [] : null;
     this.col = color ? [] : null;
+    this.kit = kit ? [] : null;
   }
-  v(x, y, z, nx, ny, nz, u, w, c) {
+  v(x, y, z, nx, ny, nz, u, w, c, k) {
     this.pos.push(x, y, z);
     this.nrm.push(nx, ny, nz);
     if (this.uv) this.uv.push(u, w);
     if (this.col) this.col.push(c.r, c.g, c.b);
+    if (this.kit) this.kit.push(k ? k[0] : 0, k ? k[1] : 0);
+  }
+  // Flat downward-facing triangle (soffits).
+  triDown(a, b, c, y, col) {
+    const cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    if (cross > 0) [b, c] = [c, b];
+    for (const p of [a, b, c]) this.v(p[0], y, -p[1], 0, -1, 0, 0, 0, col);
+  }
+  // Axis-aligned-to-facade box: along (dx,dy) for `len`, out along normal (nx,ny) for `depth`.
+  facadeBox(o, dx, dy, nx, ny, len, depth, y0, y1, col) {
+    const p = (s, t) => [o[0] + dx * s + nx * t, o[1] + dy * s + ny * t];
+    const A = p(0, 0), B = p(len, 0), C = p(len, depth), D = p(0, depth);
+    this.wall(D, C, y0, y1, col); // front
+    this.wall(A, D, y0, y1, col);
+    this.wall(C, B, y0, y1, col);
+    this.triUp(A, B, C, y1, col);
+    this.triUp(A, C, D, y1, col);
   }
   // Flat upward-facing triangle from three [east, north] points.
   triUp(a, b, c, y, col) {
@@ -43,13 +61,13 @@ class GeoBuffer {
   }
   // Vertical quad a->b, outward normal on the right-hand side of a->b. Bottom/top heights can
   // differ at each end (ya0/yb0, ya1/yb1) for walls that follow the ground.
-  wall(a, b, y0, y1, col, u0 = 0, u1 = 0, v0 = 0, v1 = 0, yb0 = y0, yb1 = y1) {
+  wall(a, b, y0, y1, col, u0 = 0, u1 = 0, v0 = 0, v1 = 0, yb0 = y0, yb1 = y1, kit = null) {
     const de = b[0] - a[0], dn = b[1] - a[1];
     const len = Math.hypot(de, dn) || 1;
     const nx = dn / len, nz = de / len;
     const A = [a[0], y0, -a[1], u0, v0], B = [b[0], yb0, -b[1], u1, v0];
     const C = [b[0], yb1, -b[1], u1, v1], D = [a[0], y1, -a[1], u0, v1];
-    for (const p of [A, B, C, A, C, D]) this.v(p[0], p[1], p[2], nx, 0, nz, p[3], p[4], col);
+    for (const p of [A, B, C, A, C, D]) this.v(p[0], p[1], p[2], nx, 0, nz, p[3], p[4], col, kit);
   }
   get count() {
     return this.pos.length / 3;
@@ -59,6 +77,7 @@ class GeoBuffer {
     let attrs = { position: { array: this.pos, size: 3 }, normal: { array: this.nrm, size: 3 } };
     if (this.uv) attrs.uv = { array: this.uv, size: 2 };
     if (this.col) attrs.color = { array: this.col, size: 3 };
+    if (this.kit) attrs.kit = { array: this.kit, size: 2 };
     if (draped) attrs = drape(attrs, T, maxEdge);
     const g = new THREE.BufferGeometry();
     for (const [name, { array, size }] of Object.entries(attrs)) g.setAttribute(name, new THREE.Float32BufferAttribute(array, size));
@@ -80,18 +99,23 @@ const GLASS = palette(['#6f8496', '#5d6e7e', '#7d93a3', '#4d5d6c', '#8a9daa', '#
 const ROOF = palette(['#4a4a4c', '#555352', '#5f5d5a', '#3f4042', '#6a6865', '#7b7a76']);
 const PLAIN = palette(['#8d8780', '#9c958c', '#7b766f']);
 const pick = (list, r) => list[Math.floor(r * list.length)];
+const nearest = (list, c) => list.reduce((best, x) => (dist3(x, c) < dist3(best, c) ? x : best), list[0]);
+const dist3 = (a, b) => (a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2;
 
 // Facade colour. Exact colours come from data where mapped (facade_color); otherwise the
 // palette follows the recorded construction material and era, and the shade is a stable guess.
 function facadeColor(b, i, style) {
   if (b.fc && /^#[0-9a-f]{6}$/i.test(b.fc)) return color(b.fc);
+  // A single street photo picks the nearest shade in the building's palette.
+  const guide = b.fcs?.conf === 'single' ? color(b.fcs.c) : null;
+  const pick = (list, r) => (guide ? nearest(list, guide) : list[Math.floor(r * list.length)]);
   const r = hash01(i * 7 + 3);
   if (style === 'glass') return pick(GLASS, r);
   if (style === 'plain') return pick(PLAIN, r);
   const mat = b.tax?.material || '';
   const year = b.tax?.year;
   if (/^frame|siding/.test(mat)) return pick(SIDING, r);
-  if (/^brick/.test(mat)) return pick(year && year < 1900 && hash01(i * 13 + 1) < 0.45 ? BROWNSTONE : BRICK, r);
+  if (/^brick/.test(mat)) return guide ? nearest([...BRICK, ...BROWNSTONE], guide) : pick(year && year < 1900 && hash01(i * 13 + 1) < 0.45 ? BROWNSTONE : BRICK, r);
   if (/concrete|stone|stucco/.test(mat)) return pick(CONCRETE, r);
   // Unknown material: taller buildings skew towards painted/precast, rowhouses towards brick.
   const brickChance = b.h < 16 ? 0.72 : 0.35;
@@ -127,40 +151,85 @@ function capPolygon(buf, outer, holes, y, col) {
   for (const [a, b, c] of faces) buf.triUp(verts[a], verts[b], verts[c], y, col);
 }
 
-// Extruded footprints. Walls are split by facade style so each gets its own texture.
-export function buildBuildings(list, { masonryMap, glassMap }) {
+// Extruded footprints. Facade walls sample the kit atlas per storey (see facade-atlas.js);
+// glass towers get their own shinier material; sheds and canopies stay plain.
+const CORNICE = { rowhouse: ['#3d3633', 0.75, 0.35], frame: ['#e9e5dc', 0.45, 0.25], warehouse: ['#8a7d6c', 1.1, 0.45] };
+const STOOP = color('#6e5244');
+
+export function buildBuildings(list, { atlas, legacyKits = false }) {
   const bufs = {
-    masonry: new GeoBuffer({ uv: true }),
-    glass: new GeoBuffer({ uv: true }),
+    facade: new GeoBuffer({ uv: true, kit: true }),
+    glass: new GeoBuffer({ uv: true, kit: true }),
     plain: new GeoBuffer(),
     roof: new GeoBuffer(),
+    detail: new GeoBuffer(),
   };
   list.forEach((b, i) => {
-    const outer = orient(toPts(b.o), true);
+    const pts = toPts(b.o);
+    const outer = orient(pts, true);
+    const reversed = outer !== pts;
+    const n = outer.length;
+    // Edge k of the oriented ring <-> edge index in the data (b.sf / b.stoop use data order).
+    const dataEdge = (k) => (reversed ? (2 * n - 2 - k) % n : k);
     const holes = (b.holes || []).map((h) => orient(toPts(h), false));
     const top = b.h, bot = b.mh || 0;
-    if (top - bot < 0.5 || outer.length < 3) return;
+    if (top - bot < 0.5 || n < 3) return;
     // Buildings stand on the lowest ground point of their footprint; walls run below grade uphill.
     const base = minGround(outer);
     b._base = base;
     b._top = base + Math.max(top, ...(b.parts || []).map((p) => p.h));
-    const style = styleOf(b);
+    // Manhattan backdrop has no tax records: pick a kit from height alone.
+    const kit = b.kit || (legacyKits ? (styleOf(b) === 'plain' ? null : b.h >= 40 ? 'glass' : b.h >= 20 ? 'midcentury' : 'rowhouse') : null);
+    const style = kit ? (kit === 'glass' ? 'glass' : 'masonry') : 'plain';
     const col = facadeColor(b, i, style);
-    const buf = bufs[style];
-    const fh = floorHeight(b) * TILE;
-    const extrude = (rings, y0, y1) => {
-      for (const ring of rings)
-        for (let k = 0; k < ring.length; k++) {
-          const a = ring[k], c = ring[(k + 1) % ring.length];
-          const len = Math.hypot(c[0] - a[0], c[1] - a[1]);
-          if (len < 0.05) continue;
-          // Whole number of bays per facade so windows are never sliced at corners.
-          const bays = len < 2 ? 0 : Math.max(1, Math.round(len / BAY_M));
-          const u1 = bays ? bays / TILE : 0.02;
-          buf.wall(a, c, base + y0, base + y1, col, bays ? 0 : 0.02, u1, y0 / fh, y1 / fh);
+    const buf = !kit ? bufs.plain : kit === 'glass' ? bufs.glass : bufs.facade;
+    const rows = kit ? KIT_ROWS[kit] : [0, 0];
+    const street = new Set(b.sf || []);
+    const fh = floorHeight(b);
+    const bay = b.bay || (kit === 'glass' ? 1.6 : BAY_M);
+    const extrude = (ring, y0, y1, isOuter) => {
+      for (let k = 0; k < ring.length; k++) {
+        const a = ring[k], c = ring[(k + 1) % ring.length];
+        const len = Math.hypot(c[0] - a[0], c[1] - a[1]);
+        if (len < 0.05) continue;
+        const de = isOuter ? dataEdge(k) : -1;
+        const onStreet = street.has(de);
+        // Whole number of bays per facade so windows are never sliced at corners.
+        const bays = len < 1.2 ? 0 : Math.max(1, Math.round(len / bay));
+        let u0 = bays ? 0 : 0.02, u1 = bays || 0.02;
+        // Put the door bay at the stoop end of the facade.
+        const stoopHere = !!b.stoop && isOuter && de === b.stoop.e;
+        if (stoopHere && b.stoop.t > 0.5 !== reversed) [u0, u1] = [u1, u0];
+        const ground = onStreet ? (b.shop ? KIT_ROWS.storefront[0] : rows[0]) : rows[1];
+        buf.wall(a, c, base + y0, base + y1, col, u0, u1, y0 / fh, y1 / fh, base + y0, base + y1, [ground, rows[1]]);
+        if (!isOuter || !onStreet) continue;
+        const dx = (c[0] - a[0]) / len, dy = (c[1] - a[1]) / len, nx = dy, ny = -dx;
+        if (b.cornice && CORNICE[kit] && y1 === top) {
+          const [hex, hgt, proj] = CORNICE[kit];
+          const cc = color(hex);
+          bufs.detail.facadeBox(a, dx, dy, nx, ny, len, proj, base + top - hgt, base + top + 0.08, cc);
+          const s0 = [a[0] + nx * proj, a[1] + ny * proj], s1 = [c[0] + nx * proj, c[1] + ny * proj];
+          bufs.detail.triDown(a, c, s1, base + top - hgt, cc);
+          bufs.detail.triDown(a, s1, s0, base + top - hgt, cc);
         }
+        if (stoopHere && bays) {
+          // Stoop up to the parlour floor in front of the door bay (inferred from era/type).
+          const bw = len / bays, w = Math.min(1.8, bw * 0.85);
+          const atEnd = b.stoop.t > 0.5 !== reversed;
+          const s = atEnd ? len - bw / 2 - w / 2 : bw / 2 - w / 2;
+          const o = [a[0] + dx * s, a[1] + dy * s];
+          const rise = 1.5, steps = 6, landing = 0.9, tread = 0.3;
+          bufs.detail.facadeBox(o, dx, dy, nx, ny, w, landing, base, base + rise, STOOP);
+          for (let st = 0; st < steps; st++) {
+            const h = rise * (1 - (st + 1) / (steps + 1));
+            const oo = [o[0] + nx * (landing + st * tread), o[1] + ny * (landing + st * tread)];
+            bufs.detail.facadeBox(oo, dx, dy, nx, ny, w, tread, base, base + h, STOOP);
+          }
+        }
+      }
     };
-    extrude([outer, ...holes], bot, top);
+    extrude(outer, bot, top, true);
+    for (const h of holes) extrude(h, bot, top, false);
     // Roof colour sampled from the 2023 aerial photo; random grey only where it couldn't be.
     const rc = b.rc ? color(b.rc) : ROOF[Math.floor(hash01(i * 31 + 5) * ROOF.length)];
     try {
@@ -172,7 +241,7 @@ export function buildBuildings(list, { masonryMap, glassMap }) {
     for (const p of b.parts || []) {
       const ring = orient(toPts(p.o), true);
       if (ring.length < 3 || p.h - p.mh < 0.5) continue;
-      extrude([ring], p.mh, p.h);
+      extrude(ring, p.mh, p.h, false);
       try {
         capPolygon(bufs.roof, ring, [], base + p.h, rc);
       } catch {
@@ -183,10 +252,11 @@ export function buildBuildings(list, { masonryMap, glassMap }) {
 
   const group = new THREE.Group();
   const mats = {
-    masonry: new THREE.MeshStandardMaterial({ vertexColors: true, map: masonryMap, roughness: 0.9 }),
-    glass: new THREE.MeshStandardMaterial({ vertexColors: true, map: glassMap, roughness: 0.25, metalness: 0.55 }),
+    facade: facadeMaterial(atlas, { roughness: 0.88 }),
+    glass: facadeMaterial(atlas, { roughness: 0.25, metalness: 0.55 }),
     plain: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }),
     roof: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }),
+    detail: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }),
   };
   for (const [k, buf] of Object.entries(bufs)) {
     if (!buf.count) continue;
