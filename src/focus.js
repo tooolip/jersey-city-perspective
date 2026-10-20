@@ -5,6 +5,32 @@ import * as THREE from 'three';
 
 const OPACITY_STEPS = [0.5, 0.85, 0];
 
+// Photo-textured walls for every focus area: { map: "buildingId:edge" -> wall, textures: [...] }.
+export async function loadPhotoFacades(baseUrl, renderer) {
+  const map = new Map(), textures = [];
+  try {
+    const res = await fetch(`${baseUrl}data/focus/index.json`);
+    if (!res.ok) return { map, textures };
+    const loader = new THREE.TextureLoader();
+    for (const name of await res.json()) {
+      const r = await fetch(`${baseUrl}data/focus/${name}/facades.json`);
+      if (!r.ok) continue;
+      const fac = await r.json();
+      const first = textures.length;
+      for (let i = 0; i < fac.pages; i++) {
+        const tex = await loader.loadAsync(`${baseUrl}data/focus/${name}/facades-${i}.jpg`);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        textures.push(tex);
+      }
+      for (const w of fac.walls) map.set(`${w.id}:${w.edge}`, { ...w, page: first + w.page, area: name });
+    }
+  } catch {
+    /* no photo facades */
+  }
+  return { map, textures };
+}
+
 export class FocusAreas {
   constructor({ scene, camera, renderer, baseUrl, hud }) {
     this.scene = scene;

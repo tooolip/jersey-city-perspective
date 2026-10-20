@@ -162,7 +162,15 @@ if (lidar) {
   for (const b of buildings) {
     const r = lidar.roofs.roofs[b._id];
     if (!r) continue;
-    if (r.absent) { b.lid = 'absent'; lidarAbsent++; continue; } // not there in 2014: keep Overture shape
+    if (r.absent) {
+      // Not there in 2014: keep Overture's shape, but trust the recorded storeys over a height
+      // that would make them implausibly short (e.g. [redacted address]: 7 storeys at 15.8 m).
+      b.lid = 'absent';
+      lidarAbsent++;
+      const st = b.tax?.storeys;
+      if (st && b.h / st < 2.6) { b.h = Math.round((st * 3.4 + 1) * 10) / 10; b.est = 'storeys'; }
+      continue;
+    }
     b.lid = 1;
     if (r.zb !== undefined) b.zb = r.zb; // ground elevation the LiDAR heights are measured from
     if (r.parts?.length) {

@@ -5,7 +5,7 @@ import { Player } from './player.js';
 import { Minimap } from './minimap.js';
 import { Inspector } from './inspector.js';
 import { Terrain } from './terrain.js';
-import { FocusAreas } from './focus.js';
+import { FocusAreas, loadPhotoFacades } from './focus.js';
 import './style.css';
 
 const $ = (id) => document.getElementById(id);
@@ -92,7 +92,8 @@ const data = await loadCity();
 setStatus('Building the city…');
 await new Promise((r) => setTimeout(r, 30)); // let the status paint
 const terrain = await Terrain.load(data.terrain, import.meta.env.BASE_URL, data.focusTerrain || []);
-const { root, query, update: updateWorld } = buildWorld(data, renderer, terrain);
+const photoFacades = await loadPhotoFacades(import.meta.env.BASE_URL, renderer);
+const { root, query, update: updateWorld } = buildWorld(data, renderer, terrain, photoFacades);
 scene.add(root);
 
 const player = new Player(camera, renderer.domElement, query, terrain);

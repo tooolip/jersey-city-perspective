@@ -162,7 +162,7 @@ function capPolygon(buf, outer, holes, y, col) {
 const CORNICE = { rowhouse: ['#3d3633', 0.75, 0.35], frame: ['#e9e5dc', 0.45, 0.25], warehouse: ['#8a7d6c', 1.1, 0.45] };
 const STOOP = color('#6e5244');
 
-export function buildBuildings(list, { atlas, legacyKits = false }) {
+export function buildBuildings(list, { atlas, legacyKits = false, photo = null }) {
   const bufs = {
     facade: new GeoBuffer({ uv: true, kit: true }),
     glass: new GeoBuffer({ uv: true, kit: true }),
@@ -170,6 +170,9 @@ export function buildBuildings(list, { atlas, legacyKits = false }) {
     roof: new GeoBuffer(),
     detail: new GeoBuffer(),
   };
+  // Photo-textured walls (focus areas), one buffer per atlas page.
+  const photoBufs = (photo?.textures || []).map(() => new GeoBuffer({ uv: true }));
+  const white = color('#ffffff');
   list.forEach((b, i) => {
     const pts = toPts(b.o);
     const outer = orient(pts, true);
@@ -210,6 +213,15 @@ export function buildBuildings(list, { atlas, legacyKits = false }) {
         if (stoopHere && b.stoop.t > 0.5 !== reversed) [u0, u1] = [u1, u0];
         const ground = onStreet ? (b.shop ? KIT_ROWS.storefront[0] : rows[0]) : rows[1];
         const Y0 = y0 === bot ? base + bot : ref + y0, Y1 = ref + y1;
+        const pf = isOuter && y1 === top ? photo?.map.get(`${b.id}:${de}`) : null;
+        if (pf) {
+          // The texture runs along the edge in data order and spans absolute heights z0..z1.
+          const [ua, va, ub, vb] = pf.uv;
+          const vAt = (y) => va + Math.min(1, Math.max(0, (y - pf.z0) / (pf.z1 - pf.z0))) * (vb - va);
+          const [s0, s1] = reversed ? [ub, ua] : [ua, ub];
+          photoBufs[pf.page].wall(a, c, Y0, Y1, white, s0, s1, vAt(Y0), vAt(Y1), Y0, Y1);
+          continue;
+        }
         buf.wall(a, c, Y0, Y1, col, u0, u1, (Y0 - base) / fh, (Y1 - base) / fh, Y0, Y1, [ground, rows[1]]);
         if (!isOuter || !onStreet) continue;
         const dx = (c[0] - a[0]) / len, dy = (c[1] - a[1]) / len, nx = dy, ny = -dx;
@@ -275,6 +287,16 @@ export function buildBuildings(list, { atlas, legacyKits = false }) {
     mesh.name = `buildings-${k}`;
     group.add(mesh);
   }
+  photoBufs.forEach((buf, i) => {
+    if (!buf.count) return;
+    // Photos already carry daylight: light them partly by themselves so they aren't shaded twice.
+    const tex = photo.textures[i];
+    const mat = new THREE.MeshStandardMaterial({ map: tex, color: '#b8b8b8', emissive: '#ffffff', emissiveMap: tex, emissiveIntensity: 0.45, roughness: 0.95 });
+    const mesh = new THREE.Mesh(buf.toGeometry(), mat);
+    mesh.castShadow = mesh.receiveShadow = true;
+    mesh.name = `buildings-photo-${i}`;
+    group.add(mesh);
+  });
   return group;
 }
 

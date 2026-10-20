@@ -163,11 +163,28 @@ This runs `scripts/focus/`:
     The OSM centreline was about 5 m off there.
 - `streets.py`: curbs from LiDAR cross-profiles averaged along each street (the 10–20 cm
   step), giving per-side road widths. Checked against the aerial photo in `curbs.jpg`.
+- `register.py`: shifts and rotates each reconstruction so its facade points land on the
+  building walls (point-to-wall ICP after a coarse search). It's conservative because walls
+  don't constrain sliding along a street: 19 of 29 reconstructions were corrected, by up to
+  ~8 m, and the rest are kept as-is.
+- `facades.py`: photo-textures walls.
+  - Each 4 cm texel is projected into up to 6 photos (at most 2 per drive-through) with the
+    registered poses. Lines of sight blocked by other buildings and sky pixels are skipped.
+  - Photos are matched in exposure, then combined per texel: the sample that agrees best with
+    the others wins. Parallax between drives suppresses cars and partly the street trees.
+  - Walls are lifted to normal exposure and packed into an atlas (`facades-0.jpg`). The
+    viewer textures those walls instead of the kit.
+  - About 30 walls so far.
 
 In the viewer:
 - `P`: jump to the nearest real photo's exact pose and overlay it (`O` opacity, `⇧P` previous,
   `X` exit). This is the main way to check the model against reality.
 - `K`: show the SfM point cloud.
+
+Photo-facade limits: the photos here are December 2019 phone captures, mostly backlit and
+leaf-off. Bare street-tree branches, signs and some parked cars get baked into the walls, and
+roofline edges pick up a ragged band of branches against sky. Buildings finished after 2019
+show their construction stage.
 
 Lessons so far:
 - Mapillary's absolute positions carry a few metres of GPS bias, so geometry comes from

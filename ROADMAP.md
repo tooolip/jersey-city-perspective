@@ -69,8 +69,11 @@ Every feature should trace back to a data source, and estimates should be flagge
 - Done everywhere:
   - 2014 lot surfaces under today's buildings no longer spill onto streets;
   - street furniture snapping fixed: 967 objects were standing in roadways, now 37.
+- Photo-textured facades: ~30 walls, from registered reconstructions with a multi-photo vote
+  per texel.
 - Next here:
-  - photo-textured facades (several photos per pixel so cars and people drop out);
+  - better facade sources: leaf-on and newer photos, or a phone walk-through capture of the
+    block; roofline cleanup;
   - correct kits for converted lofts (the east loft renders as glass);
   - wall heights at the cut (ours read ~2 m taller than the photos);
   - per-object positions from SfM clusters;

@@ -23,7 +23,7 @@ const c = (hex) => {
   return colorCache.get(hex);
 };
 
-export function buildWorld(data, renderer, terrain) {
+export function buildWorld(data, renderer, terrain, photoFacades = null) {
   setTerrain(terrain);
   const root = new THREE.Group();
   const atlas = facadeAtlas(renderer);
@@ -72,7 +72,7 @@ export function buildWorld(data, renderer, terrain) {
   root.add(buildLaneMarkings(data.roads));
   root.add(buildRails(data.rails));
 
-  const city = buildBuildings(data.buildings, { atlas });
+  const city = buildBuildings(data.buildings, { atlas, photo: photoFacades });
   city.name = 'jersey-city';
   root.add(city);
   const skyline = buildBuildings(data.skyline, { atlas, legacyKits: true });
