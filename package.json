@@ -15,7 +15,8 @@
     "fetch:lidar": ".venv/bin/python -I scripts/fetch-lidar.py",
     "process:lidar": ".venv/bin/python -I scripts/process-lidar.py",
     "fetch:facades": ".venv/bin/python -I scripts/fetch-facade-colours.py",
-    "build:data": "node scripts/build-data.mjs"
+    "build:data": "node scripts/build-data.mjs",
+    "focus": "sh scripts/focus/run.sh"
   },
   "dependencies": {
     "three": "^0.186.1"

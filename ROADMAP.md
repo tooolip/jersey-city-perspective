@@ -60,5 +60,21 @@ Every feature should trace back to a data source, and estimates should be flagge
   - real door positions (address points / photos);
   - hand-modelled landmarks: Colgate Clock, Newport Centre, PATH headhouses, churches.
 
+### M6: Focus areas with Mapillary 3D (in progress: `example-area`)
+- Photo-match view and SfM point overlay for checking against reality.
+- Done for `example-area`:
+  - street level from LiDAR plus camera tracks;
+  - the Coles Street cut between stone retaining walls, with the plateaus and lofts on top;
+  - measured curbs.
+- Done everywhere:
+  - 2014 lot surfaces under today's buildings no longer spill onto streets;
+  - street furniture snapping fixed: 967 objects were standing in roadways, now 37.
+- Next here:
+  - photo-textured facades (several photos per pixel so cars and people drop out);
+  - correct kits for converted lofts (the east loft renders as glass);
+  - wall heights at the cut (ours read ~2 m taller than the photos);
+  - per-object positions from SfM clusters;
+  - then grow the area block by block.
+
 ### M5: Art direction
 - Pick a rendering style and apply it consistently (materials, lighting, post-processing).

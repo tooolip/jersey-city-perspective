@@ -137,6 +137,43 @@ Raw downloads go in `data/raw/` (git-ignored).
 - Otherwise the facade palette follows the recorded construction and era: brick or brownstone,
   frame siding, concrete.
 
+## Focus areas (Mapillary 3D refinement)
+
+Small areas get refined one at a time using Mapillary's 3D data: each photo's computed camera
+pose and the structure-from-motion point clouds built from the photos. An area is a file in
+`areas/` (centre and radius). The first one is `example-area`, a 70 m radius around [redacted address]
+
+```bash
+npm run focus -- example-area
+```
+
+This runs `scripts/focus/`:
+
+- `fetch-3d.py`: photos within 140 m (2048 px), their poses and SfM reconstructions.
+- `build-focus.py`: aligns each reconstruction vertically, since phone GPS altitude is off by
+  ±5 m, so cameras sit 1.5 m above the LiDAR ground. Writes photo poses and the SfM points for
+  the viewer.
+- `terrain.py`:
+  - *Street level:* interpolated from LiDAR ground along road centrelines plus the 2019 camera
+    tracks.
+  - *Plateaus:* ground more than 2 m above street level becomes a solid block with
+    rubble-stone retaining walls and the measured top, including buildings that stand on it.
+  - *Cuts:* OSM "tunnels" through a plateau (the photos show open cuts, e.g. Coles Street)
+    become a corridor between the measured walls, with the roadway recentred between them.
+    The OSM centreline was about 5 m off there.
+- `streets.py`: curbs from LiDAR cross-profiles averaged along each street (the 10–20 cm
+  step), giving per-side road widths. Checked against the aerial photo in `curbs.jpg`.
+
+In the viewer:
+- `P`: jump to the nearest real photo's exact pose and overlay it (`O` opacity, `⇧P` previous,
+  `X` exit). This is the main way to check the model against reality.
+- `K`: show the SfM point cloud.
+
+Lessons so far:
+- Mapillary's absolute positions carry a few metres of GPS bias, so geometry comes from
+  LiDAR and the aerial photo, and Mapillary supplies appearance and relative layout.
+- OSM centrelines and default widths can be metres off; the focus pipeline measures them.
+
 ## Code layout
 
 ```
@@ -162,6 +199,9 @@ src/inspector.js            Building / street-object inspector panel
 src/textures.js             Procedural facade textures
 src/player.js               First-person controller (pointer lock, walk/run/jump/fly, sliding collision)
 src/minimap.js              Corner minimap and full-screen teleport map
+src/focus.js                Focus areas: photo-match view, SfM point overlay
+scripts/focus/              Focus-area pipeline (Mapillary 3D, terrain, curbs)
+areas/                      Focus-area definitions
 ```
 
 ## Next steps

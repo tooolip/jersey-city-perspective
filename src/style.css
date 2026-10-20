@@ -259,3 +259,24 @@ h1 {
   vertical-align: -1px;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
 }
+
+#photo-overlay {
+  position: fixed;
+  pointer-events: none;
+  object-fit: fill;
+  z-index: 2;
+}
+
+#photo-hud {
+  position: fixed;
+  left: 50%;
+  bottom: 30px;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 12px;
+  z-index: 3;
+  pointer-events: none;
+}

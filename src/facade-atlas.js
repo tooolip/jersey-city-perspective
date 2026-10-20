@@ -237,3 +237,34 @@ export function facadeMaterial(atlas, params = {}) {
   mat.customProgramCacheKey = () => 'facade-atlas';
   return mat;
 }
+
+// Rubble-stone retaining wall (old rail embankments): irregular dark brown-grey blocks.
+export function stoneTexture(renderer) {
+  const S = 512;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const g = cv.getContext('2d');
+  const rand = rng(23);
+  g.fillStyle = '#3e3832';
+  g.fillRect(0, 0, S, S);
+  for (let y = 0; y < S; ) {
+    const h = 26 + rand() * 30;
+    for (let x = -rand() * 40; x < S; ) {
+      const w = 40 + rand() * 70;
+      const v = 70 + rand() * 50, warm = rand() * 18;
+      g.fillStyle = `rgb(${v + warm},${v + warm * 0.6},${v - 4})`;
+      g.beginPath();
+      g.roundRect(x + 2, y + 2, w - 4, h - 4, 6);
+      g.fill();
+      // wrap horizontally so the texture tiles
+      if (x + w > S) { g.beginPath(); g.roundRect(x - S + 2, y + 2, w - 4, h - 4, 6); g.fill(); }
+      x += w;
+    }
+    y += h;
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}

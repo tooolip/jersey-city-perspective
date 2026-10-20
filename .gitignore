@@ -5,3 +5,4 @@ data/raw/
 .DS_Store
 .env.local
 data/derived/
+public/data/focus/*/photos/

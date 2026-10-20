@@ -3,24 +3,81 @@ import * as THREE from 'three';
 // Ground elevation from the LiDAR terrain grid (metres above NAVD88 ≈ mean sea level).
 // Without terrain data everything sits on a flat plane at 0 and the river is 1.6 m below.
 export class Terrain {
-  constructor(meta, cm) {
+  constructor(meta, cm, patches = []) {
     this.meta = meta;
     this.cm = cm;
     this.flat = !meta;
     this.fallback = meta ? meta.fallback : 0;
     this.waterLevel = meta ? 0.2 : -1.6;
     this.bed = meta ? meta.bed : -3.6;
+    // Focus-area patches (1 m): street level `low`, plateau `top`, and the plateau mask.
+    this.patches = patches.map((p) => ({
+      ...p,
+      low: Int16Array.from(p.low),
+      top: Int16Array.from(p.top),
+      mask: (() => { const bits = new Uint8Array(p.w * p.h), packed = p.mask; for (let i = 0; i < bits.length; i++) bits[i] = (packed[i >> 3] >> (7 - (i & 7))) & 1; return bits; })(),
+    }));
+    // Core of each plateau (mask shrunk by 2 m): general draping only climbs onto the plateau
+    // well inside its walls, so ground layers at the wall foot never flip to the top.
+    for (const p of this.patches) {
+      const core = new Uint8Array(p.w * p.h);
+      for (let r = 2; r < p.h - 2; r++)
+        for (let c = 2; c < p.w - 2; c++) {
+          let all = 1;
+          for (let dr = -2; dr <= 2 && all; dr++) for (let dc = -2; dc <= 2; dc++) if (!p.mask[(r + dr) * p.w + c + dc]) { all = 0; break; }
+          core[r * p.w + c] = all;
+        }
+      p.core = core;
+    }
   }
 
-  static async load(meta, baseUrl) {
+  static async load(meta, baseUrl, patches = []) {
     if (!meta) return new Terrain(null, null);
     const res = await fetch(`${baseUrl}data/${meta.file}`);
     if (!res.ok) return new Terrain(null, null);
-    return new Terrain(meta, new Int16Array(await res.arrayBuffer()));
+    return new Terrain(meta, new Int16Array(await res.arrayBuffer()), patches);
   }
 
-  // Bilinear sample; `fallback` outside the grid.
+  patchAt(e, n) {
+    for (const p of this.patches) {
+      const fx = e - p.e0 - 0.5, fy = p.n1 - n - 0.5;
+      if (fx >= 0 && fy >= 0 && fx < p.w - 1 && fy < p.h - 1) return { p, fx, fy };
+    }
+    return null;
+  }
+
+  static bilinear(grid, w, fx, fy) {
+    const c = Math.floor(fx), r = Math.floor(fy), tx = fx - c, ty = fy - r, i = r * w + c;
+    return ((grid[i] * (1 - tx) + grid[i + 1] * tx) * (1 - ty) + (grid[i + w] * (1 - tx) + grid[i + w + 1] * tx) * ty) / 100;
+  }
+
+  onPlateau(e, n) {
+    const hit = this.patchAt(e, n);
+    return !!hit && hit.p.mask[Math.round(hit.fy) * hit.p.w + Math.round(hit.fx)] === 1;
+  }
+
+  // Street level / plateau top where a focus patch exists; otherwise the general terrain.
+  low(e, n) {
+    const hit = this.patchAt(e, n);
+    return hit ? Terrain.bilinear(hit.p.low, hit.p.w, hit.fx, hit.fy) : this.base(e, n);
+  }
+
+  top(e, n) {
+    const hit = this.patchAt(e, n);
+    return hit ? Terrain.bilinear(hit.p.top, hit.p.w, hit.fx, hit.fy) : this.base(e, n);
+  }
+
   height(e, n) {
+    const hit = this.patchAt(e, n);
+    if (hit) {
+      const onTop = hit.p.core[Math.round(hit.fy) * hit.p.w + Math.round(hit.fx)] === 1;
+      return Terrain.bilinear(onTop ? hit.p.top : hit.p.low, hit.p.w, hit.fx, hit.fy);
+    }
+    return this.base(e, n);
+  }
+
+  // Bilinear sample of the general 3 m grid; `fallback` outside it.
+  base(e, n) {
     if (this.flat) return 0;
     const { e0, n1, res, w, h } = this.meta;
     const fx = (e - e0) / res, fy = (n1 - n) / res;
@@ -36,7 +93,7 @@ export class Terrain {
 // Subdivide triangles (non-indexed, flat layers) so they can follow the terrain, then lift
 // every vertex by the ground height. `attrs` maps attribute name -> { array, size }; position
 // must be first. Vertices are handled as interleaved float runs for speed.
-export function drape(attrs, terrain, maxEdge = 7) {
+export function drape(attrs, terrain, maxEdge = 7, heightFn = (e, n) => terrain.height(e, n)) {
   if (terrain.flat) return attrs;
   const names = Object.keys(attrs);
   const sizes = names.map((n) => attrs[n].size);
@@ -80,6 +137,6 @@ export function drape(attrs, terrain, maxEdge = 7) {
     });
   });
   const pos = res.position.array;
-  for (let i = 0; i < pos.length; i += 3) pos[i + 1] += terrain.height(pos[i], -pos[i + 2]);
+  for (let i = 0; i < pos.length; i += 3) pos[i + 1] += heightFn(pos[i], -pos[i + 2]);
   return res;
 }

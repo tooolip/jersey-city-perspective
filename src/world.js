@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { toPts, bbox, pointInRing, distToRing, distToSeg, Grid } from './geo.js';
-import { buildBuildings, buildEmbankment, buildLaneMarkings, buildFlatAreas, buildSeawall, buildRibbons, buildCrosswalks, buildRails, buildWater, Y, setTerrain } from './builders.js';
-import { facadeAtlas } from './facade-atlas.js';
+import { buildBuildings, buildEmbankment, buildPlateaus, buildLaneMarkings, buildFlatAreas, buildSeawall, buildRibbons, buildCrosswalks, buildRails, buildWater, Y, setTerrain } from './builders.js';
+import { facadeAtlas, stoneTexture } from './facade-atlas.js';
 import { buildTrees, buildMeasuredTrees, buildLamps } from './props.js';
 import { buildSigns } from './signs.js';
 import { buildFurniture } from './furniture.js';
@@ -46,7 +46,9 @@ export function buildWorld(data, renderer, terrain) {
   const pierLift = terrain.flat ? 0.4 : 0.05; // measured pier decks are already in the terrain
   root.add(buildSeawall(data.areas.filter((a) => a.k === 'pier'), Y.area + pierLift));
   root.add(buildEmbankment(data.areas.filter((a) => a.emb)));
-  root.add(buildFlatAreas(data.areas.filter((a) => !a.emb), (a) => (a.k === 'pier' ? Y.area + pierLift : Y.area), (a) => c(AREA_COLORS[a.k] || '#888888')));
+  const plateaus = data.areas.filter((a) => a.k === 'plateau');
+  if (plateaus.length) root.add(buildPlateaus(plateaus, stoneTexture(renderer)));
+  root.add(buildFlatAreas(data.areas.filter((a) => !a.emb && a.k !== 'plateau'), (a) => (a.k === 'pier' ? Y.area + pierLift : Y.area), (a) => c(AREA_COLORS[a.k] || '#888888')));
 
   // Roads: elevated ways ramp down where they meet only ground-level streets.
   const nodeUse = new Map();

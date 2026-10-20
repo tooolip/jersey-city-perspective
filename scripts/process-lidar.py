@@ -34,12 +34,34 @@ E0, N1 = meta["e0"], meta["n1"]
 W1, H1, W5, H5 = meta["w1"], meta["h1"], meta["w5"], meta["h5"]
 os.makedirs(OUT, exist_ok=True)
 
+# ------------------------------------------------------------------ building footprints
+proj = lambda lon, lat: ((lon - ORIGIN[1]) * M_LON, (lat - ORIGIN[0]) * M_LAT)
+blds = json.load(open("data/raw/overture_buildings_jc.geojson"))["features"]
+footprints = []
+for f in blds:
+    if f["properties"].get("is_underground"):
+        continue
+    g = f["geometry"]
+    polys = [g["coordinates"]] if g["type"] == "Polygon" else g["coordinates"]
+    for poly in polys:
+        rings = [[proj(*c) for c in ring] for ring in poly]
+        if len(rings[0]) < 4:
+            continue
+        footprints.append((f["properties"]["id"], Polygon(rings[0], rings[1:]), f["properties"].get("height")))
+
+px1 = Affine(1.0, 0, E0, 0, -1.0, N1)  # local meters -> 1 m grid
+bmask1 = features.rasterize(((p, 1) for _, p, _ in footprints), out_shape=(H1, W1), transform=px1, dtype=np.uint8).astype(bool)
+
 # ------------------------------------------------------------------ terrain
 gs, gn = np.load(f"{RAW}/ground_sum.npy"), np.load(f"{RAW}/ground_n.npy")
 ground = np.where(gn > 0, gs / np.maximum(gn, 1), np.nan)
+# Ground measured inside today's footprints is a 2014 lot surface (raised lots, demolished
+# buildings' slabs). Drop it (plus 1 m) and refill from the sidewalk around, so old lot levels
+# can't spill onto streets.
+ground[ndimage.binary_dilation(bmask1, iterations=1)] = np.nan
 holes = np.isnan(ground)
 idx = ndimage.distance_transform_edt(holes, return_distances=False, return_indices=True)
-dtm = ndimage.gaussian_filter(ground[tuple(idx)], 1.5).astype(np.float32)
+dtm = ndimage.gaussian_filter(ground[tuple(idx)], 0.8).astype(np.float32)
 dtm.tofile(f"{OUT}/dtm.f32")
 json.dump({"e0": E0, "n1": N1, "w": W1, "h": H1, "res": 1.0, "dataset": meta["dataset"],
            "measured": round(float(1 - holes.mean()), 3)}, open(f"{OUT}/dtm.json", "w"))
@@ -60,23 +82,6 @@ low[: min(H5, H1 * 2), : min(W5, W1 * 2)] = np.where(np.isfinite(dsm), dsm, np.i
 low = low.reshape(H1, 2, W1, 2).min(axis=(1, 3))
 np.where(np.isfinite(low), low, dtm).astype(np.float32).tofile(f"{OUT}/surface_low.f32")
 
-# ------------------------------------------------------------------ building footprints
-proj = lambda lon, lat: ((lon - ORIGIN[1]) * M_LON, (lat - ORIGIN[0]) * M_LAT)
-blds = json.load(open("data/raw/overture_buildings_jc.geojson"))["features"]
-footprints = []
-for f in blds:
-    if f["properties"].get("is_underground"):
-        continue
-    g = f["geometry"]
-    polys = [g["coordinates"]] if g["type"] == "Polygon" else g["coordinates"]
-    for poly in polys:
-        rings = [[proj(*c) for c in ring] for ring in poly]
-        if len(rings[0]) < 4:
-            continue
-        footprints.append((f["properties"]["id"], Polygon(rings[0], rings[1:]), f["properties"].get("height")))
-
-px1 = Affine(1.0, 0, E0, 0, -1.0, N1)  # local meters -> 1 m grid
-bmask1 = features.rasterize(((p, 1) for _, p, _ in footprints), out_shape=(H1, W1), transform=px1, dtype=np.uint8).astype(bool)
 bmask1 = ndimage.binary_dilation(bmask1, iterations=1)
 
 # ------------------------------------------------------------------ vegetation (NDVI 2023)
@@ -193,7 +198,10 @@ for bid, poly, h_ov in footprints:
     parts = sorted(parts, key=lambda p: -p["a"])[:12]
     for p in parts:
         del p["a"]
-    roofs[bid] = {"base": round(h_base, 1), "levels": len(levels) - base_i, "parts": parts}
+    # zb: the ground elevation these heights are measured from, so the viewer can keep roof
+    # elevations right when it seats the building on different ground (e.g. on a plateau).
+    zb = float(np.median(dtm05[r0:r1, c0:c1][mask_s]))
+    roofs[bid] = {"base": round(h_base, 1), "zb": round(zb, 2), "levels": len(levels) - base_i, "parts": parts}
 json.dump({"dataset": meta["dataset"], "roofs": roofs}, open(f"{OUT}/roofs.json", "w"))
 with_parts = sum(1 for r in roofs.values() if r.get("parts"))
 print(f"roofs {len(roofs)} buildings, {with_parts} with raised parts ({sum(len(r.get('parts', [])) for r in roofs.values())} parts), {absent} not in 2014 LiDAR")

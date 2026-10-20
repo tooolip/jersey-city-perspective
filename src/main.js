@@ -5,6 +5,7 @@ import { Player } from './player.js';
 import { Minimap } from './minimap.js';
 import { Inspector } from './inspector.js';
 import { Terrain } from './terrain.js';
+import { FocusAreas } from './focus.js';
 import './style.css';
 
 const $ = (id) => document.getElementById(id);
@@ -90,13 +91,18 @@ setStatus('Downloading map data…');
 const data = await loadCity();
 setStatus('Building the city…');
 await new Promise((r) => setTimeout(r, 30)); // let the status paint
-const terrain = await Terrain.load(data.terrain, import.meta.env.BASE_URL);
+const terrain = await Terrain.load(data.terrain, import.meta.env.BASE_URL, data.focusTerrain || []);
 const { root, query, update: updateWorld } = buildWorld(data, renderer, terrain);
 scene.add(root);
 
 const player = new Player(camera, renderer.domElement, query, terrain);
 const minimap = new Minimap(data, $('minimap'), $('bigmap'));
 const inspector = new Inspector($('inspector'), $('crosshair'), query, data);
+const focus = new FocusAreas({
+  scene, camera, renderer, baseUrl: import.meta.env.BASE_URL,
+  hud: (text) => { $('photo-hud').textContent = text || ''; $('photo-hud').classList.toggle('hidden', !text); },
+});
+await focus.load();
 
 // Place list in the UI
 const placeList = $('places');
@@ -139,6 +145,10 @@ function setMap(open) {
 window.addEventListener('keydown', (ev) => {
   if (ev.code === 'KeyM') setMap(!mapOpen);
   if (ev.code === 'KeyI') inspector.toggle();
+  if (ev.code === 'KeyK') focus.toggleCloud();
+  if (ev.code === 'KeyP') focus.nextPhoto(player.e, player.n, ev.shiftKey ? -1 : 1);
+  if (ev.code === 'KeyO') focus.cycleOpacity();
+  if (ev.code === 'KeyX') focus.exitPhoto();
   if (ev.code === 'Escape' && mapOpen) setMap(false);
   const digit = /^Digit([1-9])$/.exec(ev.code);
   if (digit && PLACES[digit[1] - 1]) goTo(digit[1] - 1);
@@ -166,7 +176,8 @@ renderer.setAnimationLoop((time) => {
   timer.update(time);
   const dt = Math.min(0.1, timer.getDelta());
   fitToWindow();
-  player.update(dt);
+  if (focus.photoMode) focus.applyCamera();
+  else player.update(dt);
   updateWorld(time / 1000);
 
   // Shadow camera follows the player, snapped to texels to avoid shimmering.
@@ -201,4 +212,4 @@ renderer.setAnimationLoop((time) => {
 });
 
 // Handy for debugging from the console.
-Object.assign(window, { scene, camera, player, query, data, renderer, inspector, terrain, ll: (lat, lon) => ll2local(data.meta, lat, lon) });
+Object.assign(window, { THREE, scene, camera, player, query, data, renderer, inspector, terrain, focus, ll: (lat, lon) => ll2local(data.meta, lat, lon) });

@@ -1,7 +1,7 @@
 // Converts raw OSM + Overture downloads into public/data/city.json, a compact
 // scene description in local meters. Coordinates are [east, north] relative to ORIGIN.
 // Usage: node scripts/build-data.mjs
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import polygonClipping from 'polygon-clipping';
 import { loadParcels, joinBuildingsToParcels } from './lib/parcels.mjs';
 import { loadImagery, sampleRoofColours } from './lib/roof-colours.mjs';
@@ -42,6 +42,14 @@ const parcelsRaw = await optional('data/raw/parcels.geojson');
 const osmPois = (await optional('data/raw/osm_pois.json'))?.elements || [];
 const places = (await optional('data/raw/overture_places.geojson'))?.features || [];
 const imagery = await loadImagery();
+// Focus areas (areas/*.json) refined with Mapillary 3D data: terrain patches, plateaus, cuts.
+const focusAreas = [];
+for (const f of (await readdir('areas').catch(() => [])).filter((x) => x.endsWith('.json'))) {
+  const area = await readJSON(`areas/${f}`);
+  const terrainPatch = await optional(`data/derived/focus/${area.name}/terrain.json`);
+  const streets = await optional(`data/derived/focus/${area.name}/streets.json`);
+  focusAreas.push({ ...area, terrain: terrainPatch, streets });
+}
 const mapillary = (await optional('data/raw/mapillary_features.json')) || [];
 const lidar = await loadLidar();
 const photoColours = (await optional('data/derived/facades.json')) || {};
@@ -156,6 +164,7 @@ if (lidar) {
     if (!r) continue;
     if (r.absent) { b.lid = 'absent'; lidarAbsent++; continue; } // not there in 2014: keep Overture shape
     b.lid = 1;
+    if (r.zb !== undefined) b.zb = r.zb; // ground elevation the LiDAR heights are measured from
     if (r.parts?.length) {
       b.parts = r.parts;
       b.h = Math.max(r.base, 2.5);
@@ -431,6 +440,9 @@ if (lidar) {
   const landGeom = land.map((l) => [l.o, ...(l.holes || [])].map((f) => { const r = toPts(f); r.push(r[0]); return r; }));
   const back = (poly) => { const rings = poly.map((r) => openRing(r).flat()); return rings.length > 1 ? { o: rings[0], holes: rings.slice(1) } : { o: rings[0] }; };
   landTerrain = polygonClipping.intersection(landGeom, [hole]).map(back);
+  // Plateaus in focus areas are drawn as solid blocks with vertical walls, not draped land.
+  const plateauGeom = focusAreas.flatMap((fa) => fa.terrain?.plateaus || []).map((pl) => [pl.o, ...(pl.holes || [])].map((f) => { const r = toPts(f); r.push(r[0]); return r; }));
+  if (plateauGeom.length) landTerrain = polygonClipping.difference(landTerrain.map((l) => [l.o, ...(l.holes || [])].map((f) => { const r = toPts(f); r.push(r[0]); return r; })), ...plateauGeom.map((g) => [g])).map(back);
   land = polygonClipping.difference(landGeom, [hole]).map(back);
   // Measured trees replace generated ones inside the LiDAR extent.
   const inExtent = (x, y) => x > tx0 && x < tx1 && y > ty0 && y < ty1;
@@ -441,6 +453,58 @@ if (lidar) {
   trees.push(...keep);
   raisedTrees.length = 0;
 }
+
+// ---------------------------------------------------------------- focus areas
+// Measured curbs: split each focus street at the area's edge; the inside pieces get per-side
+// widths (left/right of the way's own direction) from LiDAR curb profiles.
+for (const fa of focusAreas) {
+  if (!fa.streets) continue;
+  const [fcx, fcy] = proj(fa.center[1], fa.center[0]);
+  const lim = fa.radius + 20;
+  const inside = (p) => Math.hypot(p[0] - fcx, p[1] - fcy) <= lim;
+  const out = [];
+  for (const r of roads) {
+    const st = r.n && fa.streets[r.n];
+    const pts = toPts(r.p);
+    if (!st || r.e || !pts.some(inside)) { out.push(r); continue; }
+    // densify to 4 m so the split lands near the boundary
+    const dense = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+      const [a, b] = [pts[i - 1], pts[i]], L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(1, Math.ceil(L / 4));
+      for (let k = 1; k <= n; k++) dense.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]);
+    }
+    let run = [dense[0]], runIn = inside(dense[0]);
+    const flush = () => {
+      if (run.length < 2) return;
+      const piece = { ...r, p: run.flat().map((v) => Math.round(v * 10) / 10) };
+      if (runIn) {
+        const d = [run[run.length - 1][0] - run[0][0], run[run.length - 1][1] - run[0][1]];
+        const same = d[0] * st.dir[0] + d[1] * st.dir[1] >= 0;
+        const L = same ? st.left : st.right, R = same ? st.right : st.left;
+        if (L) piece.wl = L;
+        if (R) piece.wr = R;
+        piece.w = Math.round(((piece.wl ?? r.w / 2) + (piece.wr ?? r.w / 2)) * 10) / 10;
+        piece.curbs = fa.name;
+      }
+      out.push(piece);
+    };
+    for (let i = 1; i < dense.length; i++) {
+      const io = inside(dense[i]);
+      run.push(dense[i]);
+      if (io !== runIn) { flush(); run = [dense[i]]; runIn = io; }
+    }
+    flush();
+  }
+  roads.length = 0;
+  roads.push(...out);
+}
+
+// Cuts mapped as tunnels (open in reality, between retaining walls) are drawn at street level.
+for (const fa of focusAreas) {
+  for (const t of fa.terrain?.tunnels || []) roads.push({ k: t.k, w: t.w, p: t.p, n: t.name || undefined, cut: 1 });
+  for (const pl of fa.terrain?.plateaus || []) areas.push({ k: 'plateau', o: pl.o, holes: pl.holes, focus: fa.name });
+}
+const focusTerrain = focusAreas.filter((fa) => fa.terrain).map((fa) => ({ name: fa.name, ...fa.terrain.patch }));
 
 // ---------------------------------------------------------------- storefront signs
 const businesses = collectBusinesses(osmPois, places, proj).filter((b) => inScope(b.p, 60));
@@ -491,6 +555,7 @@ const city = {
   land,
   landTerrain,
   terrain,
+  focusTerrain,
   trees,
   raisedTrees,
   lidarTrees,

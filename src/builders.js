@@ -18,6 +18,12 @@ export function setTerrain(terrain) {
 }
 export const ground = (e, n) => T.height(e, n);
 const minGround = (ring) => ring.reduce((m, p) => Math.min(m, T.height(p[0], p[1])), Infinity);
+// Buildings mostly on a plateau stand on its top; others on their lowest ground point.
+function seatOf(ring) {
+  const on = ring.filter((p) => T.onPlateau(p[0], p[1]));
+  if (on.length * 2 < ring.length) return minGround(ring);
+  return Math.min(...on.map((p) => T.top(p[0], p[1])));
+}
 
 // Accumulates non-indexed triangles.
 class GeoBuffer {
@@ -73,12 +79,12 @@ class GeoBuffer {
     return this.pos.length / 3;
   }
   // draped: subdivide and lift onto the terrain (y values become offsets above the ground).
-  toGeometry(draped = false, maxEdge = 7) {
+  toGeometry(draped = false, maxEdge = 7, heightFn) {
     let attrs = { position: { array: this.pos, size: 3 }, normal: { array: this.nrm, size: 3 } };
     if (this.uv) attrs.uv = { array: this.uv, size: 2 };
     if (this.col) attrs.color = { array: this.col, size: 3 };
     if (this.kit) attrs.kit = { array: this.kit, size: 2 };
-    if (draped) attrs = drape(attrs, T, maxEdge);
+    if (draped) attrs = drape(attrs, T, maxEdge, heightFn);
     const g = new THREE.BufferGeometry();
     for (const [name, { array, size }] of Object.entries(attrs)) g.setAttribute(name, new THREE.Float32BufferAttribute(array, size));
     g.computeBoundingSphere();
@@ -175,9 +181,11 @@ export function buildBuildings(list, { atlas, legacyKits = false }) {
     const top = b.h, bot = b.mh || 0;
     if (top - bot < 0.5 || n < 3) return;
     // Buildings stand on the lowest ground point of their footprint; walls run below grade uphill.
-    const base = minGround(outer);
+    const base = seatOf(outer);
+    // LiDAR heights are measured from zb: keep the measured roof elevations wherever we seat it.
+    const ref = b.zb !== undefined && !b.est && Math.abs(b.zb - base) < 8 ? b.zb : base;
     b._base = base;
-    b._top = base + Math.max(top, ...(b.parts || []).map((p) => p.h));
+    b._top = ref + Math.max(top, ...(b.parts || []).map((p) => p.h));
     // Manhattan backdrop has no tax records: pick a kit from height alone.
     const kit = b.kit || (legacyKits ? (styleOf(b) === 'plain' ? null : b.h >= 40 ? 'glass' : b.h >= 20 ? 'midcentury' : 'rowhouse') : null);
     const style = kit ? (kit === 'glass' ? 'glass' : 'masonry') : 'plain';
@@ -201,16 +209,17 @@ export function buildBuildings(list, { atlas, legacyKits = false }) {
         const stoopHere = !!b.stoop && isOuter && de === b.stoop.e;
         if (stoopHere && b.stoop.t > 0.5 !== reversed) [u0, u1] = [u1, u0];
         const ground = onStreet ? (b.shop ? KIT_ROWS.storefront[0] : rows[0]) : rows[1];
-        buf.wall(a, c, base + y0, base + y1, col, u0, u1, y0 / fh, y1 / fh, base + y0, base + y1, [ground, rows[1]]);
+        const Y0 = y0 === bot ? base + bot : ref + y0, Y1 = ref + y1;
+        buf.wall(a, c, Y0, Y1, col, u0, u1, (Y0 - base) / fh, (Y1 - base) / fh, Y0, Y1, [ground, rows[1]]);
         if (!isOuter || !onStreet) continue;
         const dx = (c[0] - a[0]) / len, dy = (c[1] - a[1]) / len, nx = dy, ny = -dx;
         if (b.cornice && CORNICE[kit] && y1 === top) {
           const [hex, hgt, proj] = CORNICE[kit];
           const cc = color(hex);
-          bufs.detail.facadeBox(a, dx, dy, nx, ny, len, proj, base + top - hgt, base + top + 0.08, cc);
+          bufs.detail.facadeBox(a, dx, dy, nx, ny, len, proj, ref + top - hgt, ref + top + 0.08, cc);
           const s0 = [a[0] + nx * proj, a[1] + ny * proj], s1 = [c[0] + nx * proj, c[1] + ny * proj];
-          bufs.detail.triDown(a, c, s1, base + top - hgt, cc);
-          bufs.detail.triDown(a, s1, s0, base + top - hgt, cc);
+          bufs.detail.triDown(a, c, s1, ref + top - hgt, cc);
+          bufs.detail.triDown(a, s1, s0, ref + top - hgt, cc);
         }
         if (stoopHere && bays) {
           // Stoop up to the parlour floor in front of the door bay (inferred from era/type).
@@ -233,7 +242,7 @@ export function buildBuildings(list, { atlas, legacyKits = false }) {
     // Roof colour sampled from the 2023 aerial photo; random grey only where it couldn't be.
     const rc = b.rc ? color(b.rc) : ROOF[Math.floor(hash01(i * 31 + 5) * ROOF.length)];
     try {
-      capPolygon(bufs.roof, outer, holes, base + top, rc);
+      capPolygon(bufs.roof, outer, holes, ref + top, rc);
     } catch {
       /* degenerate footprint */
     }
@@ -243,7 +252,7 @@ export function buildBuildings(list, { atlas, legacyKits = false }) {
       if (ring.length < 3 || p.h - p.mh < 0.5) continue;
       extrude(ring, p.mh, p.h, false);
       try {
-        capPolygon(bufs.roof, ring, [], base + p.h, rc);
+        capPolygon(bufs.roof, ring, [], ref + p.h, rc);
       } catch {
         /* skip */
       }
@@ -316,6 +325,47 @@ export function buildEmbankment(areas) {
   return group;
 }
 
+// Plateaus (focus areas): raised ground behind retaining walls, e.g. old rail embankments.
+// Rubble-stone walls from street level up to the measured top; the top follows LiDAR.
+export function buildPlateaus(areas, stoneMap) {
+  const walls = new GeoBuffer({ uv: true });
+  const top = new GeoBuffer();
+  const white = color('#ffffff'), deck = color('#7c7a72');
+  for (const a of areas) {
+    const rings = [orient(toPts(a.o), true), ...(a.holes || []).map((h) => orient(toPts(h), false))];
+    for (const ring of rings) {
+      let u = 0;
+      for (let k = 0; k < ring.length; k++) {
+        const p = ring[k], q = ring[(k + 1) % ring.length];
+        const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
+        const n = Math.max(1, Math.ceil(len / 2));
+        for (let s = 0; s < n; s++) {
+          const A = [p[0] + ((q[0] - p[0]) * s) / n, p[1] + ((q[1] - p[1]) * s) / n];
+          const B = [p[0] + ((q[0] - p[0]) * (s + 1)) / n, p[1] + ((q[1] - p[1]) * (s + 1)) / n];
+          const la = T.low(...A) - 0.3, lb = T.low(...B) - 0.3, ta = T.top(...A) + 0.15, tb = T.top(...B) + 0.15;
+          const du = len / n / 2.5; // texture tile = 2.5 m of wall
+          walls.wall(A, B, la, ta, white, u, u + du, la / 2.5, ta / 2.5, lb, tb);
+          u += du;
+        }
+      }
+    }
+    try {
+      capPolygon(top, rings[0], rings.slice(1), 0.02, deck);
+    } catch {
+      /* skip */
+    }
+  }
+  const group = new THREE.Group();
+  const w = new THREE.Mesh(walls.toGeometry(), new THREE.MeshStandardMaterial({ map: stoneMap, roughness: 0.95 }));
+  const t = new THREE.Mesh(top.toGeometry(true, 2, (e, n) => T.top(e, n)), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
+  for (const m of [w, t]) {
+    m.castShadow = m.receiveShadow = true;
+    group.add(m);
+  }
+  group.name = 'plateaus';
+  return group;
+}
+
 // Vertical bulkhead along every land edge that meets the river, from the river bed up to the
 // ground at the shoreline.
 export function buildSeawall(land, top = 0.02, skipEdge = () => false) {
@@ -344,8 +394,8 @@ export function buildSeawall(land, top = 0.02, skipEdge = () => false) {
 
 // --------------------------------------------------------------------------- linear features
 
-// Offsets a polyline into left/right edges with mitred joins.
-function offsetLine(pts, hw) {
+// Offsets a polyline into left/right edges with mitred joins (hr defaults to hw: symmetric).
+function offsetLine(pts, hw, hr = hw) {
   const n = pts.length;
   const segN = [];
   for (let i = 0; i < n - 1; i++) {
@@ -370,7 +420,7 @@ function offsetLine(pts, hw) {
       }
     }
     left.push([pts[i][0] + m[0] * hw * s, pts[i][1] + m[1] * hw * s]);
-    right.push([pts[i][0] - m[0] * hw * s, pts[i][1] - m[1] * hw * s]);
+    right.push([pts[i][0] - m[0] * hr * s, pts[i][1] - m[1] * hr * s]);
   }
   return { left, right };
 }
@@ -409,7 +459,8 @@ export function buildRibbons(list, { y, colorOf, caps = true, elevated = null })
     if (pts.length < 2) continue;
     const col = colorOf(r);
     const hw = r.w / 2;
-    const { left, right } = offsetLine(pts, hw);
+    // Measured curbs (focus areas) can sit at different distances either side of the OSM line.
+    const { left, right } = offsetLine(pts, r.wl ?? hw, r.wr ?? hw);
     const elev = r.e && elevated ? elevationProfile(pts, r.e, elevated.rampStart(r), elevated.rampEnd(r)) : null;
     const yAt = (i) => (elev ? elev[i] : 0) + y;
     for (let i = 0; i < pts.length - 1; i++) {
@@ -442,7 +493,7 @@ export function buildRibbons(list, { y, colorOf, caps = true, elevated = null })
         }
       }
     }
-    if (caps && !elev) {
+    if (caps && !elev && r.wl === undefined) {
       // Round-ish end caps hide gaps where separate ways meet at an angle.
       for (const p of [pts[0], pts[pts.length - 1]]) {
         const seg = 8;
@@ -649,11 +700,13 @@ export function buildLaneMarkings(roads) {
 
     const twoWay = !r.ow;
     const lanes = r.ln || (twoWay ? 2 : 1);
+    // With measured curbs the carriageway's middle is where the centre line goes.
+    const mid = r.wl !== undefined && r.wr !== undefined ? (r.wl - r.wr) / 2 : 0;
     if (twoWay && (CENTRE_LINE_ROADS.has(r.k) || r.ln >= 2)) {
       for (const [a, b] of open) {
         const seg = slice(pts, dist, a, b);
-        stripe(seg, 0.12, 0.055, yellow);
-        stripe(seg, -0.12, 0.055, yellow);
+        stripe(seg, mid + 0.12, 0.055, yellow);
+        stripe(seg, mid - 0.12, 0.055, yellow);
       }
     }
     const perDir = twoWay ? Math.floor(lanes / 2) : lanes;
@@ -661,10 +714,10 @@ export function buildLaneMarkings(roads) {
     const offsets = [];
     if (twoWay) {
       const lw = r.w / 2 / perDir;
-      for (let k = 1; k < perDir; k++) offsets.push(k * lw, -k * lw);
+      for (let k = 1; k < perDir; k++) offsets.push(mid + k * lw, mid - k * lw);
     } else {
       const lw = r.w / perDir;
-      for (let k = 1; k < perDir; k++) offsets.push(-r.w / 2 + k * lw);
+      for (let k = 1; k < perDir; k++) offsets.push(-(r.wr ?? r.w / 2) + k * lw);
     }
     for (const [a, b] of open)
       for (let d = a; d + 3 <= b; d += 12) {

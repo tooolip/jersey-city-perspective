@@ -77,6 +77,18 @@ export function buildStreetFurniture({ mapillary, osmPois, proj, inScope, buildi
       rGrid.insertBox(s, Math.min(s.a[0], s.b[0]) - s.hw - 2, Math.min(s.a[1], s.b[1]) - s.hw - 2, Math.max(s.a[0], s.b[0]) + s.hw + 2, Math.max(s.a[1], s.b[1]) + s.hw + 2);
     }
   }
+  // Carriageways only (sidewalk lines don't count), with per-side curb offsets where measured.
+  const cGrid = new Grid(30);
+  for (const r of roads) {
+    if (r.e || /foot|path|pedestrian|steps|cycleway|corridor/.test(r.k)) continue;
+    const pts = toPts(r.p);
+    const hl = r.wl ?? r.w / 2, hr = r.wr ?? r.w / 2;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const s = { a: pts[i], b: pts[i + 1], hl, hr };
+      const m = Math.max(hl, hr) + 2;
+      cGrid.insertBox(s, Math.min(s.a[0], s.b[0]) - m, Math.min(s.a[1], s.b[1]) - m, Math.max(s.a[0], s.b[0]) + m, Math.max(s.a[1], s.b[1]) + m);
+    }
+  }
   const nearestRoad = (p) => {
     let best = null, bd = Infinity;
     for (const s of rGrid.query(p[0], p[1])) {
@@ -107,13 +119,22 @@ export function buildStreetFurniture({ mapillary, osmPois, proj, inScope, buildi
       }
       break;
     }
-    const nr = nearestRoad(q);
-    if (nr && nr.d < nr.s.hw + 0.35 && !/foot|path|pedestrian|steps|cycleway/.test(nr.s.k)) {
-      const c = project(q, nr.s);
-      let dx = q[0] - c[0], dy = q[1] - c[1];
-      let l = Math.hypot(dx, dy);
-      if (l < 0.01) { dx = -(nr.s.b[1] - nr.s.a[1]); dy = nr.s.b[0] - nr.s.a[0]; l = Math.hypot(dx, dy); }
-      q = [c[0] + (dx / l) * (nr.s.hw + 0.6), c[1] + (dy / l) * (nr.s.hw + 0.6)];
+    // Out of every carriageway the point falls in (twice over for intersections: out of one
+    // road, then out of the cross street, which leaves it on the corner).
+    for (let pass = 0; pass < 3; pass++) {
+      let moved = false;
+      for (const s of cGrid.query(q[0], q[1])) {
+        const dx = s.b[0] - s.a[0], dy = s.b[1] - s.a[1], L = Math.hypot(dx, dy) || 1;
+        const t = ((q[0] - s.a[0]) * dx + (q[1] - s.a[1]) * dy) / (L * L);
+        if (t < -0.02 || t > 1.02) continue;
+        const lat = (dx * (q[1] - s.a[1]) - dy * (q[0] - s.a[0])) / L; // + = left of a->b
+        if (lat > -s.hr - 0.35 && lat < s.hl + 0.35) {
+          const target = lat >= 0 ? s.hl + 0.6 : -(s.hr + 0.6);
+          q = [q[0] - (dy / L) * (target - lat), q[1] + (dx / L) * (target - lat)];
+          moved = true;
+        }
+      }
+      if (!moved) break;
     }
     return q;
   };
