@@ -6,6 +6,7 @@ import polygonClipping from 'polygon-clipping';
 import { loadParcels, joinBuildingsToParcels } from './lib/parcels.mjs';
 import { loadImagery, sampleRoofColours } from './lib/roof-colours.mjs';
 import { collectBusinesses, placeSigns } from './lib/signs.mjs';
+import { buildStreetFurniture } from './lib/street.mjs';
 import { segIntersect, pointInRing, distToSeg, distToRing, toPts, bbox, centroid, ringArea, openRing, assembleRings, Grid } from './lib/geom.mjs';
 
 const ORIGIN = { lat: 40.724, lon: -74.042 };
@@ -39,6 +40,7 @@ const parcelsRaw = await optional('data/raw/parcels.geojson');
 const osmPois = (await optional('data/raw/osm_pois.json'))?.elements || [];
 const places = (await optional('data/raw/overture_places.geojson'))?.features || [];
 const imagery = await loadImagery();
+const mapillary = (await optional('data/raw/mapillary_features.json')) || [];
 if (!imagery) console.warn('(missing data/raw/naip.rgb; run scripts/fetch-imagery.py)');
 
 // ---------------------------------------------------------------- boundary
@@ -190,7 +192,7 @@ for (const e of osm) {
     const p = proj(e.lon, e.lat);
     if (!inScope(p)) continue;
     if (t.natural === 'tree') trees.push(...p);
-    else if (t.highway === 'street_lamp') lamps.push(...p);
+    // OSM street lamps come in through osm_pois as street furniture.
     else if (t.highway === 'traffic_signals') signals.push(...p);
     continue;
   }
@@ -222,6 +224,9 @@ for (const e of osm) {
     const el = elevationOf(t);
     if (el) r.e = el;
     if (t.name) r.n = t.name;
+    if (t.oneway === 'yes' || t.oneway === '1' || t.junction === 'roundabout') r.ow = 1;
+    else if (t.oneway === '-1') r.ow = -1;
+    if (t.lanes && parseInt(t.lanes, 10)) r.ln = parseInt(t.lanes, 10);
     if (t.footway) r.f = t.footway; // sidewalk / crossing
     (FOOT.has(t.highway) ? paths : roads).push(r);
     continue;
@@ -382,11 +387,21 @@ for (const a of areas) {
 trees.length = 0;
 const raisedTrees = []; // [east, north, base height]
 for (const p of treeSet) (p.length > 2 ? raisedTrees : trees).push(...p);
-lamps.push(...genLamps);
 
 // ---------------------------------------------------------------- storefront signs
 const businesses = collectBusinesses(osmPois, places, proj).filter((b) => inScope(b.p, 60));
 const { signs, skipped: signsSkipped } = placeSigns(businesses, buildings, roads);
+
+// ---------------------------------------------------------------- street furniture
+const street = buildStreetFurniture({ mapillary, osmPois, proj, inScope, buildings, roads: [...roads, ...paths] });
+const furniture = street.items;
+// Generated lamps only fill streets where no real lamp (photo-detected or mapped) is nearby.
+const realLamps = new Grid(40);
+for (const f of furniture) if (f.k === 'lamp') realLamps.insertBox(f, f.x - 40, f.y - 40, f.x + 40, f.y + 40);
+for (let i = 0; i < genLamps.length; i += 2) {
+  const x = genLamps[i], y = genLamps[i + 1];
+  if (!realLamps.query(x, y).some((f) => Math.hypot(f.x - x, f.y - y) < 35)) lamps.push(x, y);
+}
 
 // ---------------------------------------------------------------- write
 const city = {
@@ -399,6 +414,7 @@ const city = {
       'Storeys, year built, construction, addresses: NJ Parcels & MOD-IV tax records (NJOGIS)',
       imagery ? `Roof colours: USDA NAIP ${imagery.date} aerial photo (30 cm, public domain)` : null,
       'Additional business names: Overture Maps places (CDLA-Permissive-2.0)',
+      mapillary.length ? 'Street furniture & traffic signs: Mapillary map features (CC-BY-SA), positions triangulated from street-level photos' : null,
     ].filter(Boolean),
     contextMeters: CONTEXT_M,
     generated: new Date().toISOString(),
@@ -417,6 +433,7 @@ const city = {
   lamps,
   signals,
   signs,
+  furniture,
 };
 
 await mkdir('public/data', { recursive: true });
@@ -430,4 +447,7 @@ console.log(`embankment blocks ${areas.filter((a) => a.emb).length}, raised tree
 console.log(`trees ${trees.length / 2}, lamps ${lamps.length / 2}, signals ${signals.length / 2}`);
 console.log(`parcels joined ${parcelStats}/${buildings.length}, roof colours ${roofStats}, heights from storeys ${buildings.filter((b) => b.est === 'storeys').length}`);
 console.log(`businesses ${businesses.length} -> signs ${signs.length} (osm ${signs.filter((s) => s.src === 'osm').length}), skipped ${signsSkipped}`);
+const fk = furniture.reduce((a, f) => ((a[f.k] = (a[f.k] || 0) + 1), a), {});
+console.log(`furniture ${furniture.length} (mapillary ${street.fromMly}, osm ${street.fromOsm}, sign posts ${street.posts}), generated lamps ${lamps.length / 2}`);
+console.log('  ' + Object.entries(fk).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', '));
 console.log(`boundary ${boundary.length} pts; wrote public/data/city.json (${(json.length / 1e6).toFixed(2)} MB)`);

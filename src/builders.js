@@ -461,3 +461,107 @@ export function buildWater(renderer, size = 60000) {
   mesh.userData.update = (t) => normalMap.offset.set(t * 0.012, t * 0.007);
   return mesh;
 }
+
+// --------------------------------------------------------------------------- lane markings
+// From OSM oneway/lanes tags: double yellow centre lines on two-way main streets, dashed white
+// lines between same-direction lanes (US urban 3 m dash / 9 m gap). Lines stop short of junctions.
+const CAR_ROADS = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'residential', 'unclassified',
+  'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
+const CENTRE_LINE_ROADS = new Set(['trunk', 'primary', 'secondary', 'tertiary']);
+
+function cumulative(pts) {
+  const d = [0];
+  for (let i = 1; i < pts.length; i++) d.push(d[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  return d;
+}
+
+// Sub-polyline between distances d0 and d1 along pts.
+function slice(pts, dist, d0, d1) {
+  const at = (d) => {
+    let i = 1;
+    while (i < dist.length - 1 && dist[i] < d) i++;
+    const t = (d - dist[i - 1]) / (dist[i] - dist[i - 1] || 1);
+    return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t];
+  };
+  const out = [at(d0)];
+  for (let i = 0; i < pts.length; i++) if (dist[i] > d0 && dist[i] < d1) out.push(pts[i]);
+  out.push(at(d1));
+  return out;
+}
+
+export function buildLaneMarkings(roads) {
+  const buf = new GeoBuffer();
+  const yellow = color('#d4aa2c'), white = color('#e8e6df');
+  const key = (x, y) => `${x},${y}`;
+  const use = new Map();
+  for (const r of roads) {
+    if (!CAR_ROADS.has(r.k) || r.e) continue;
+    const seen = new Set();
+    for (let i = 0; i < r.p.length; i += 2) {
+      const k = key(r.p[i], r.p[i + 1]);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      use.set(k, (use.get(k) || 0) + 1);
+    }
+  }
+  const stripe = (pts, off, halfW, col) => {
+    let line = pts;
+    if (off) {
+      const { left, right } = offsetLine(pts, Math.abs(off));
+      line = off > 0 ? left : right;
+    }
+    const { left, right } = offsetLine(line, halfW);
+    for (let i = 0; i < line.length - 1; i++) {
+      buf.triUp(left[i], right[i], right[i + 1], Y.mark, col);
+      buf.triUp(left[i], right[i + 1], left[i + 1], Y.mark, col);
+    }
+  };
+  for (const r of roads) {
+    if (!CAR_ROADS.has(r.k) || r.e || r.w < 6) continue;
+    const pts = dedupe(toPts(r.p));
+    if (pts.length < 2) continue;
+    const dist = cumulative(pts);
+    const L = dist[dist.length - 1];
+    // Keep paint clear of intersections (any vertex shared with another road).
+    const R = 7;
+    const blocked = [];
+    pts.forEach((p, i) => { if ((use.get(key(p[0], p[1])) || 0) > 1) blocked.push([dist[i] - R, dist[i] + R]); });
+    const open = [];
+    let cur = 0;
+    for (const [b0, b1] of blocked.sort((a, b) => a[0] - b[0])) {
+      if (b0 > cur + 2) open.push([cur, Math.min(b0, L)]);
+      cur = Math.max(cur, b1);
+    }
+    if (L > cur + 2) open.push([cur, L]);
+    if (!open.length) continue;
+
+    const twoWay = !r.ow;
+    const lanes = r.ln || (twoWay ? 2 : 1);
+    if (twoWay && (CENTRE_LINE_ROADS.has(r.k) || r.ln >= 2)) {
+      for (const [a, b] of open) {
+        const seg = slice(pts, dist, a, b);
+        stripe(seg, 0.12, 0.055, yellow);
+        stripe(seg, -0.12, 0.055, yellow);
+      }
+    }
+    const perDir = twoWay ? Math.floor(lanes / 2) : lanes;
+    if (perDir < 2) continue;
+    const offsets = [];
+    if (twoWay) {
+      const lw = r.w / 2 / perDir;
+      for (let k = 1; k < perDir; k++) offsets.push(k * lw, -k * lw);
+    } else {
+      const lw = r.w / perDir;
+      for (let k = 1; k < perDir; k++) offsets.push(-r.w / 2 + k * lw);
+    }
+    for (const [a, b] of open)
+      for (let d = a; d + 3 <= b; d += 12) {
+        const seg = slice(pts, dist, d, d + 3);
+        for (const o of offsets) stripe(seg, o, 0.06, white);
+      }
+  }
+  const mesh = new THREE.Mesh(buf.toGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }));
+  mesh.receiveShadow = true;
+  mesh.name = 'lane-markings';
+  return mesh;
+}

@@ -11,6 +11,7 @@
     "fetch:overture": "sh scripts/fetch-overture.sh",
     "fetch:parcels": "node scripts/fetch-parcels.mjs",
     "fetch:imagery": ".venv/bin/python scripts/fetch-imagery.py",
+    "fetch:mapillary": "node scripts/fetch-mapillary.mjs",
     "build:data": "node scripts/build-data.mjs"
   },
   "dependencies": {

@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { toPts, bbox, pointInRing, distToRing, distToSeg, Grid } from './geo.js';
-import { buildBuildings, buildEmbankment, buildFlatAreas, buildSeawall, buildRibbons, buildCrosswalks, buildRails, buildWater, Y } from './builders.js';
+import { buildBuildings, buildEmbankment, buildLaneMarkings, buildFlatAreas, buildSeawall, buildRibbons, buildCrosswalks, buildRails, buildWater, Y } from './builders.js';
 import { masonryTexture, glassTexture } from './textures.js';
 import { buildTrees, buildLamps } from './props.js';
 import { buildSigns } from './signs.js';
+import { buildFurniture } from './furniture.js';
 
 const AREA_COLORS = {
   park: '#6f8f4e', grass: '#7a9a55', wood: '#56743f', pitch: '#5f8d4a', playground: '#a88f6a',
@@ -56,6 +57,7 @@ export function buildWorld(data, renderer) {
   }));
   root.add(buildRibbons(data.paths.filter((p) => p.f !== 'crossing'), { y: Y.path, colorOf: (p) => c(PATH_COLORS[p.k] || '#a8a399') }));
   root.add(buildCrosswalks(data.paths));
+  root.add(buildLaneMarkings(data.roads));
   root.add(buildRails(data.rails));
 
   const city = buildBuildings(data.buildings, { masonryMap, glassMap });
@@ -71,7 +73,10 @@ export function buildWorld(data, renderer) {
   root.add(buildLamps(data.lamps));
   root.add(buildSigns(data.signs || [], renderer));
 
-  return { root, query: new WorldQuery(data), update: (t) => water.userData.update(t) };
+  const query = new WorldQuery(data);
+  root.add(buildFurniture(data.furniture || [], renderer, (x, y) => query.streetAt(x, y)));
+
+  return { root, query, update: (t) => water.userData.update(t) };
 }
 
 // Collision and lookup queries in [east, north] space.

@@ -24,7 +24,7 @@ Open http://localhost:5173 and click to start.
 | `Space` | Jump (in fly mode: up) |
 | `F` | Toggle fly mode, then `E` / `Q` to go up / down |
 | `M` | Full map; click anywhere on it to teleport |
-| `I` | Inspector: aim at a building to see its address, year built, storeys, height, construction, roof colour and businesses, with the source of each value |
+| `I` | Inspector: aim at a building or street object to see what the records say about it (address, year built, storeys, height, construction, roof colour, businesses; or sign type and when it was last photographed), with the source of each value |
 | `1`–`7` | Jump to a landmark (Exchange Place, Newport, Hamilton Park, Grove St PATH, Holland Tunnel, Sixth St Embankment, Newport Centre) |
 | `Esc` | Release the mouse |
 
@@ -41,10 +41,13 @@ npm run fetch:osm       # OpenStreetMap: streets, rail, parks, water, businesses
 npm run fetch:overture  # Overture buildings (+ Manhattan) and places
 npm run fetch:parcels   # NJ tax parcels with MOD-IV records (no owner names)
 npm run fetch:imagery   # USDA NAIP 2023 30 cm aerial photo (~250 MB)
+npm run fetch:mapillary # Mapillary traffic signs + street objects (needs MAPILLARY_TOKEN)
 npm run build:data      # -> public/data/city.json
 ```
 
-Parcels, places and imagery are optional: the build skips any that are missing.
+Parcels, places, imagery and Mapillary are optional: the build skips any that are missing.
+For Mapillary, put a client token from mapillary.com/dashboard/developers in `.env.local`
+(git-ignored) as `MAPILLARY_TOKEN=MLY|...`, or set it in the environment.
 
 Raw downloads go in `data/raw/` (git-ignored).
 
@@ -62,10 +65,22 @@ Raw downloads go in `data/raw/` (git-ignored).
 - **Storefront signs:** real business names from OSM (preferred) and Overture places (open,
   high-confidence, street-facing categories only), mounted on the facade facing the street. Known
   chains use their brand colours; the rest use generic colours by kind.
+- **Street furniture and traffic signs:** [Mapillary](https://www.mapillary.com) map features
+  (CC-BY-SA). These are objects detected in street-level photos and triangulated, mostly last
+  photographed in 2018–2019, some in 2026. Included: street lights, utility poles, traffic and
+  pedestrian signals, hydrants, trash cans, benches, cabinets, manholes, drains, stop lines, lane
+  arrows and ~2,800 classified traffic signs on shared posts. Positions are good to a few metres
+  and are snapped out of buildings and carriageways. Traffic cones and temporary barriers are
+  dropped. Sign faces are drawn to the standard US (MUTCD) design for the detected type. Green
+  "general directions" detections are rendered as street-name blades showing the OSM street name.
+- **Bus stops, Citi Bike docks, PATH entrances:** OSM, used where Mapillary has nothing within 10 m.
+- **Lane markings:** from OSM `oneway`/`lanes`. Double yellow centre lines on two-way main streets,
+  dashed white lines between same-direction lanes, clear of intersections.
 - **Everything else:** © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors,
   ODbL, via the Overpass API.
-- **Generated:** OSM maps only ~120 trees and ~70 lamps here, so street trees (every ~8 m along
-  sidewalks), park/wood trees, and lamps (~every 32 m) are placed procedurally with a fixed seed.
+- **Generated:** OSM maps only ~120 trees here, so street trees (every ~8 m along sidewalks) and
+  park/wood trees are placed procedurally with a fixed seed. Generated lamps (~every 32 m) now
+  appear only where no real street light is within 35 m (~150 remain).
 
 ### Modeling notes
 
@@ -89,14 +104,16 @@ scripts/fetch-osm.mjs       Overpass downloads (with retries / mirrors)
 scripts/fetch-overture.sh   Overture building downloads
 scripts/fetch-parcels.mjs   NJ parcels + MOD-IV download
 scripts/fetch-imagery.py    NAIP aerial photo download (windowed read, reprojected)
+scripts/fetch-mapillary.mjs Mapillary map features download (tiled)
 scripts/build-data.mjs      Projection, boundary, clipping, land/water, generated trees & lamps
-scripts/lib/                Parcel join, roof-colour sampling, sign placement, geometry helpers
+scripts/lib/                Parcel join, roof colours, storefront signs, street furniture, geometry
 src/main.js                 Renderer, sky/sun/shadows, HUD, landmarks, main loop
 src/world.js                Builds the scene from city.json; collision & street-name queries
 src/builders.js             Mesh builders: buildings, ground areas, roads, rails, water, seawall
 src/props.js                Instanced trees and street lamps
 src/signs.js                Storefront signs (text atlases, brand colours) and glazing
-src/inspector.js            Building inspector panel
+src/furniture.js            Street furniture models, traffic-sign faces, road decals
+src/inspector.js            Building / street-object inspector panel
 src/textures.js             Procedural facade textures
 src/player.js               First-person controller (pointer lock, walk/run/jump/fly, sliding collision)
 src/minimap.js              Corner minimap and full-screen teleport map

@@ -15,7 +15,7 @@ Every feature should trace back to a data source, and estimates should be flagge
 | Overture buildings (in use) | Footprints, heights (mostly USGS LiDAR) | GeoParquet via CLI | ODbL / CDLA |
 | **Overture places** | Business names and categories (Meta/Microsoft-sourced), far denser than OSM | GeoParquet via CLI | CDLA-Permissive |
 | **OpenStreetMap** (in use) | Streets, lanes, crossings, signals, stop signs, hydrants, benches, bus stops, Citi Bike docks, shop names, building colours | Overpass | ODbL |
-| **Mapillary** | Detected traffic signs and street objects with positions; street-level photos for facade colour reference | Graph API, needs a free access token | CC-BY-SA |
+| **Mapillary** (in use) | ~16.8k detected traffic signs and street objects with positions and facing direction (mostly 2018–2019 photos); street-level photos for facade colour reference | Graph API with a client token in `.env.local` | CC-BY-SA |
 | ~~Google Street View~~ | Not usable: the terms forbid deriving content from it | n/a | n/a |
 
 ## Milestones
@@ -28,11 +28,16 @@ Every feature should trace back to a data source, and estimates should be flagge
 - **Inspector** (`I` key): look at a building to see its address, year, storeys, height and
   material, plus where each value came from and whether it's measured or estimated.
 
-### M2: What's on the street
-- Street furniture at mapped positions: traffic signals, stop signs, hydrants, benches, bus
-  stops, Citi Bike docks, bollards, street-name signs at intersections.
-- Lane markings from OSM `lanes`/`turn:lanes`/`oneway`, curbs and real sidewalk widths.
-- Mapillary traffic-sign detections, which need the user's access token.
+### M2: What's on the street (done)
+- Street furniture at detected positions: street lights, utility poles, traffic and pedestrian
+  signals, hydrants, trash cans, benches, cabinets, manholes, drains, bike racks (Mapillary),
+  plus bus stops, shelters, Citi Bike docks and PATH entrances (OSM).
+- ~2,800 traffic signs on shared posts, faces drawn to the US standard for each detected type,
+  and street-name blades with the real street name.
+- Stop lines, lane arrows and bike symbols where Mapillary saw them. Centre and lane lines from
+  OSM `oneway`/`lanes`.
+- Still open: curbs and real sidewalk widths, crosswalk styles (ladder vs. standard),
+  signal mast arms, and refreshing old (2019) detections where newer photos exist.
 
 ### M3: LiDAR geometry
 - Terrain from ground-classified points (small grades, the Bergen Hill rise west of the Turnpike).
