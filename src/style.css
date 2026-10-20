@@ -172,3 +172,90 @@ h1 {
   font-size: 13px;
   opacity: 0.8;
 }
+
+#crosshair {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+#inspector {
+  position: fixed;
+  left: 16px;
+  top: 92px;
+  width: min(380px, calc(100vw - 32px));
+  max-height: calc(100vh - 140px);
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--panel);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+#inspector h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+#inspector h3 {
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+
+#inspector table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+#inspector th {
+  text-align: left;
+  font-weight: 600;
+  padding: 2px 8px 2px 0;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+#inspector td {
+  padding: 2px 6px 2px 0;
+  vertical-align: top;
+}
+
+#inspector .src {
+  opacity: 0.6;
+  font-size: 11px;
+}
+
+#inspector .warn {
+  color: #ffb347;
+  font-size: 11px;
+}
+
+#inspector ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  line-height: 1.7;
+}
+
+#inspector .hint {
+  margin: 0;
+  opacity: 0.7;
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: -1px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}

@@ -24,6 +24,7 @@ Open http://localhost:5173 and click to start.
 | `Space` | Jump (in fly mode: up) |
 | `F` | Toggle fly mode, then `E` / `Q` to go up / down |
 | `M` | Full map; click anywhere on it to teleport |
+| `I` | Inspector: aim at a building to see its address, year built, storeys, height, construction, roof colour and businesses, with the source of each value |
 | `1`–`7` | Jump to a landmark (Exchange Place, Newport, Hamilton Park, Grove St PATH, Holland Tunnel, Sixth St Embankment, Newport Centre) |
 | `Esc` | Release the mouse |
 
@@ -33,16 +34,17 @@ The browser loads one pre-built file, `public/data/city.json`, with everything i
 (`[east, north]` from an origin at 40.724, -74.042). To rebuild it from fresh downloads:
 
 ```bash
-# 1. OpenStreetMap: streets, sidewalks, rail, parks, water, piers, trees, lamps
-npm run fetch:osm
+# One-time Python setup (Overture CLI + raster tools)
+python3 -m venv .venv && .venv/bin/pip install overturemaps rasterio numpy
 
-# 2. Overture Maps buildings (needs the Python CLI once:
-#    python3 -m venv .venv && .venv/bin/pip install overturemaps)
-npm run fetch:overture
-
-# 3. Convert to public/data/city.json
-npm run build:data
+npm run fetch:osm       # OpenStreetMap: streets, rail, parks, water, businesses, street furniture
+npm run fetch:overture  # Overture buildings (+ Manhattan) and places
+npm run fetch:parcels   # NJ tax parcels with MOD-IV records (no owner names)
+npm run fetch:imagery   # USDA NAIP 2023 30 cm aerial photo (~250 MB)
+npm run build:data      # -> public/data/city.json
 ```
+
+Parcels, places and imagery are optional: the build skips any that are missing.
 
 Raw downloads go in `data/raw/` (git-ignored).
 
@@ -52,6 +54,14 @@ Raw downloads go in `data/raw/` (git-ignored).
   buildings. Footprints come from OpenStreetMap. Heights mostly come from **USGS 3DEP LiDAR**
   (~3,000 buildings), and the rest from Microsoft ML Buildings. About 20% of the buildings in the
   area (615) have no measured height and get an estimate (rowhouse ≈ 11 m, larger footprint ≈ 14 m).
+- **Storeys, year built, construction, use, address:** NJ Parcels + MOD-IV tax records (NJOGIS).
+  These are joined to footprints by area vote. Material is inferred from the assessor's shorthand,
+  e.g. `3S-B-D-2U` means 3 storeys, brick, 2 units. Owner names are not downloaded.
+- **Roof colours:** median colour inside each footprint (inset 0.6 m, ignoring tree canopy and deep
+  shadow), sampled from the USDA NAIP 2023 30 cm aerial photo (public domain).
+- **Storefront signs:** real business names from OSM (preferred) and Overture places (open,
+  high-confidence, street-facing categories only), mounted on the facade facing the street. Known
+  chains use their brand colours; the rest use generic colours by kind.
 - **Everything else:** © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors,
   ODbL, via the Overpass API.
 - **Generated:** OSM maps only ~120 trees and ~70 lamps here, so street trees (every ~8 m along
@@ -66,25 +76,35 @@ Raw downloads go in `data/raw/` (git-ignored).
 - Elevated roads (OSM `bridge`/`layer`) are raised 6.5 m per layer, with pillars, and ramp down
   where they meet ground-level streets. Tunnels are skipped.
 - The Sixth Street (Harsimus Stem) Embankment is raised into 7.5 m stone blocks with trees on top.
-- Facade textures are generated in code: punched windows for masonry, curtain-wall glass for
-  buildings 40 m and taller. Each building is tinted from brick / painted / glass palettes.
+- Window rows follow the recorded storey count when it agrees with the measured height.
+  Measured buildings here average 3.9 m per storey, so storey-only estimates use 3.75 m plus a parapet.
+- Facade palettes follow the recorded construction and era: brick or brownstone, frame siding,
+  concrete. Buildings 40 m and taller, or post-2000 and 25 m and taller, get curtain-wall glass.
+  Exact facade colours aren't in any dataset yet (see [ROADMAP.md](ROADMAP.md)).
 
 ## Code layout
 
 ```
 scripts/fetch-osm.mjs       Overpass downloads (with retries / mirrors)
 scripts/fetch-overture.sh   Overture building downloads
+scripts/fetch-parcels.mjs   NJ parcels + MOD-IV download
+scripts/fetch-imagery.py    NAIP aerial photo download (windowed read, reprojected)
 scripts/build-data.mjs      Projection, boundary, clipping, land/water, generated trees & lamps
+scripts/lib/                Parcel join, roof-colour sampling, sign placement, geometry helpers
 src/main.js                 Renderer, sky/sun/shadows, HUD, landmarks, main loop
 src/world.js                Builds the scene from city.json; collision & street-name queries
 src/builders.js             Mesh builders: buildings, ground areas, roads, rails, water, seawall
 src/props.js                Instanced trees and street lamps
+src/signs.js                Storefront signs (text atlases, brand colours) and glazing
+src/inspector.js            Building inspector panel
 src/textures.js             Procedural facade textures
 src/player.js               First-person controller (pointer lock, walk/run/jump/fly, sliding collision)
 src/minimap.js              Corner minimap and full-screen teleport map
 ```
 
-## Ideas for the next passes
+## Next steps
+
+See [ROADMAP.md](ROADMAP.md) for the data-driven plan. Older ideas:
 
 - **Art direction:** pick a target style (photoreal vs. stylized/low-poly) and redo materials to match.
 - **Facades:** storefronts on commercial streets (Newark Ave, Grove St, Washington Blvd), stoops

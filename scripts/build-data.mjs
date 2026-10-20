@@ -3,6 +3,10 @@
 // Usage: node scripts/build-data.mjs
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import polygonClipping from 'polygon-clipping';
+import { loadParcels, joinBuildingsToParcels } from './lib/parcels.mjs';
+import { loadImagery, sampleRoofColours } from './lib/roof-colours.mjs';
+import { collectBusinesses, placeSigns } from './lib/signs.mjs';
+import { segIntersect, pointInRing, distToSeg, distToRing, toPts, bbox, centroid, ringArea, openRing, assembleRings, Grid } from './lib/geom.mjs';
 
 const ORIGIN = { lat: 40.724, lon: -74.042 };
 const M_PER_DEG_LAT = 111132.954 - 559.822 * Math.cos(2 * ORIGIN.lat * Math.PI / 180);
@@ -13,6 +17,7 @@ const proj = (lon, lat) => [
   Math.round((lat - ORIGIN.lat) * M_PER_DEG_LAT * 10) / 10,
 ];
 const projLL = (p) => proj(p.lon, p.lat);
+const unproj = (e, n) => [ORIGIN.lon + e / M_PER_DEG_LON, ORIGIN.lat + n / M_PER_DEG_LAT];
 
 // How far outside the walkable boundary we still render detail (context ring).
 const CONTEXT_M = 260;
@@ -28,97 +33,13 @@ const osmRel = (await readJSON('data/raw/osm_relations.json')).elements;
 const boundaryRoads = (await readJSON('data/raw/boundary_roads.json')).elements;
 const ovJC = (await readJSON('data/raw/overture_buildings_jc.geojson')).features;
 const ovMH = (await readJSON('data/raw/overture_buildings_manhattan.geojson')).features;
-
-// ---------------------------------------------------------------- geometry utils
-function segIntersect(a, b, c, d) {
-  const r = [b[0] - a[0], b[1] - a[1]], s = [d[0] - c[0], d[1] - c[1]];
-  const den = r[0] * s[1] - r[1] * s[0];
-  if (Math.abs(den) < 1e-9) return null;
-  const t = ((c[0] - a[0]) * s[1] - (c[1] - a[1]) * s[0]) / den;
-  const u = ((c[0] - a[0]) * r[1] - (c[1] - a[1]) * r[0]) / den;
-  return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? { t, u, p: [a[0] + t * r[0], a[1] + t * r[1]] } : null;
-}
-
-function pointInRing(p, ring) {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i], [xj, yj] = ring[j];
-    if ((yi > p[1]) !== (yj > p[1]) && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi) inside = !inside;
-  }
-  return inside;
-}
-
-function distToSeg(p, a, b) {
-  const dx = b[0] - a[0], dy = b[1] - a[1];
-  const l2 = dx * dx + dy * dy;
-  let t = l2 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2 : 0;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
-}
-
-function distToRing(p, ring) {
-  let d = Infinity;
-  for (let i = 0; i < ring.length - 1; i++) d = Math.min(d, distToSeg(p, ring[i], ring[i + 1]));
-  return d;
-}
-
-const toPts = (flat) => { const r = []; for (let i = 0; i < flat.length; i += 2) r.push([flat[i], flat[i + 1]]); return r; };
-const bbox = (pts) => pts.reduce((b, p) => [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])], [Infinity, Infinity, -Infinity, -Infinity]);
-
-const centroid = (ring) => {
-  let x = 0, y = 0;
-  for (const p of ring) { x += p[0]; y += p[1]; }
-  return [x / ring.length, y / ring.length];
-};
-
-const ringArea = (ring) => {
-  let a = 0;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) a += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
-  return a / 2;
-};
-
-// Drop closing duplicate + consecutive duplicates.
-function openRing(ring) {
-  const out = [];
-  for (const p of ring) {
-    const q = out[out.length - 1];
-    if (!q || q[0] !== p[0] || q[1] !== p[1]) out.push(p);
-  }
-  if (out.length > 1) {
-    const f = out[0], l = out[out.length - 1];
-    if (f[0] === l[0] && f[1] === l[1]) out.pop();
-  }
-  return out;
-}
-
-// Join way segments end-to-end into closed rings (OSM multipolygon assembly).
-function assembleRings(lines) {
-  const key = (p) => `${p[0]},${p[1]}`;
-  const pool = lines.filter((l) => l.length > 1).map((l) => l.slice());
-  const rings = [];
-  while (pool.length) {
-    let ring = pool.pop();
-    let grew = true;
-    while (key(ring[0]) !== key(ring[ring.length - 1]) && grew) {
-      grew = false;
-      const end = key(ring[ring.length - 1]);
-      for (let i = 0; i < pool.length; i++) {
-        const l = pool[i];
-        if (key(l[0]) === end) ring = ring.concat(l.slice(1));
-        else if (key(l[l.length - 1]) === end) ring = ring.concat(l.slice(0, -1).reverse());
-        else continue;
-        pool.splice(i, 1);
-        grew = true;
-        break;
-      }
-    }
-    if (ring.length >= 4) {
-      if (key(ring[0]) !== key(ring[ring.length - 1])) ring.push(ring[0]);
-      rings.push(ring);
-    }
-  }
-  return rings;
-}
+// Optional enrichment sources (the build still works without them).
+const optional = async (p) => { try { return await readJSON(p); } catch { console.warn(`(missing ${p})`); return null; } };
+const parcelsRaw = await optional('data/raw/parcels.geojson');
+const osmPois = (await optional('data/raw/osm_pois.json'))?.elements || [];
+const places = (await optional('data/raw/overture_places.geojson'))?.features || [];
+const imagery = await loadImagery();
+if (!imagery) console.warn('(missing data/raw/naip.rgb; run scripts/fetch-imagery.py)');
 
 // ---------------------------------------------------------------- boundary
 // West: NJ Turnpike Newark Bay Extension. North: 12th Street up to the Holland Tunnel
@@ -215,6 +136,10 @@ function convertBuildings(features, filter) {
 const buildings = convertBuildings(ovJC, (c) => inScope(c));
 // Manhattan backdrop: everything east of the river in the download.
 const skyline = convertBuildings(ovMH, (c) => c[0] > 1200);
+
+// Tax records (storeys, year built, construction, address) and roof colours from the aerial photo.
+const parcelStats = parcelsRaw ? joinBuildingsToParcels(buildings, loadParcels(parcelsRaw, proj)) : 0;
+const roofStats = imagery ? sampleRoofColours(buildings, imagery, unproj) : 0;
 
 // ---------------------------------------------------------------- roads & rail
 const ROAD_WIDTH = {
@@ -370,21 +295,6 @@ for (const a of areas) {
 let seed = 1234567;
 const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
 
-class Grid {
-  constructor(cell) { this.cell = cell; this.map = new Map(); }
-  key(x, y) { return `${Math.floor(x / this.cell)},${Math.floor(y / this.cell)}`; }
-  insertBox(item, x0, y0, x1, y1) {
-    for (let x = Math.floor(x0 / this.cell); x <= Math.floor(x1 / this.cell); x++)
-      for (let y = Math.floor(y0 / this.cell); y <= Math.floor(y1 / this.cell); y++) {
-        const k = `${x},${y}`;
-        if (!this.map.has(k)) this.map.set(k, []);
-        this.map.get(k).push(item);
-      }
-  }
-  query(x, y) { return this.map.get(this.key(x, y)) || []; }
-}
-
-
 const bGrid = new Grid(40);
 for (const b of buildings) {
   const ring = toPts(b.o);
@@ -474,6 +384,10 @@ const raisedTrees = []; // [east, north, base height]
 for (const p of treeSet) (p.length > 2 ? raisedTrees : trees).push(...p);
 lamps.push(...genLamps);
 
+// ---------------------------------------------------------------- storefront signs
+const businesses = collectBusinesses(osmPois, places, proj).filter((b) => inScope(b.p, 60));
+const { signs, skipped: signsSkipped } = placeSigns(businesses, buildings, roads);
+
 // ---------------------------------------------------------------- write
 const city = {
   meta: {
@@ -481,8 +395,11 @@ const city = {
     units: 'meters, [east, north] relative to origin',
     sources: [
       'Buildings: Overture Maps Foundation (OSM footprints; heights from USGS 3DEP LiDAR & Microsoft ML)',
-      'Streets, water, parks, trees: © OpenStreetMap contributors (ODbL)',
-    ],
+      'Streets, water, parks, trees, businesses: © OpenStreetMap contributors (ODbL)',
+      'Storeys, year built, construction, addresses: NJ Parcels & MOD-IV tax records (NJOGIS)',
+      imagery ? `Roof colours: USDA NAIP ${imagery.date} aerial photo (30 cm, public domain)` : null,
+      'Additional business names: Overture Maps places (CDLA-Permissive-2.0)',
+    ].filter(Boolean),
     contextMeters: CONTEXT_M,
     generated: new Date().toISOString(),
   },
@@ -499,6 +416,7 @@ const city = {
   raisedTrees,
   lamps,
   signals,
+  signs,
 };
 
 await mkdir('public/data', { recursive: true });
@@ -510,4 +428,6 @@ console.log(`land ${land.length} polygons`);
 console.log(`roads ${roads.length}, paths ${paths.length}, rails ${rails.length}, areas ${areas.length}, water ${water.length}`);
 console.log(`embankment blocks ${areas.filter((a) => a.emb).length}, raised trees ${raisedTrees.length / 3}`);
 console.log(`trees ${trees.length / 2}, lamps ${lamps.length / 2}, signals ${signals.length / 2}`);
+console.log(`parcels joined ${parcelStats}/${buildings.length}, roof colours ${roofStats}, heights from storeys ${buildings.filter((b) => b.est === 'storeys').length}`);
+console.log(`businesses ${businesses.length} -> signs ${signs.length} (osm ${signs.filter((s) => s.src === 'osm').length}), skipped ${signsSkipped}`);
 console.log(`boundary ${boundary.length} pts; wrote public/data/city.json (${(json.length / 1e6).toFixed(2)} MB)`);

@@ -12,3 +12,7 @@ mkdir -p data/raw
 # Lower / Midtown-south Manhattan skyline across the Hudson (backdrop only)
 "$OVERTURE" download --bbox=-74.022,40.698,-73.990,40.745 -f geojson --type=building \
   -o data/raw/overture_buildings_manhattan.geojson
+
+# Places (business names + categories) for storefront signs
+"$OVERTURE" download --bbox=-74.060,40.713,-74.024,40.735 -f geojson --type=place \
+  -o data/raw/overture_places.geojson

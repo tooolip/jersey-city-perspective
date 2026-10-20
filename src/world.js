@@ -3,6 +3,7 @@ import { toPts, bbox, pointInRing, distToRing, distToSeg, Grid } from './geo.js'
 import { buildBuildings, buildEmbankment, buildFlatAreas, buildSeawall, buildRibbons, buildCrosswalks, buildRails, buildWater, Y } from './builders.js';
 import { masonryTexture, glassTexture } from './textures.js';
 import { buildTrees, buildLamps } from './props.js';
+import { buildSigns } from './signs.js';
 
 const AREA_COLORS = {
   park: '#6f8f4e', grass: '#7a9a55', wood: '#56743f', pitch: '#5f8d4a', playground: '#a88f6a',
@@ -68,6 +69,7 @@ export function buildWorld(data, renderer) {
   root.add(buildTrees(data.trees));
   if (data.raisedTrees?.length) root.add(buildTrees(data.raisedTrees, 3, 100000));
   root.add(buildLamps(data.lamps));
+  root.add(buildSigns(data.signs || [], renderer));
 
   return { root, query: new WorldQuery(data), update: (t) => water.userData.update(t) };
 }

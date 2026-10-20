@@ -58,27 +58,48 @@ const color = (hex) => new THREE.Color(hex);
 const palette = (list) => list.map(color);
 
 const BRICK = palette(['#8e4b3b', '#7d4434', '#9b5a45', '#6b4a3a', '#a0644c', '#5e4339', '#b07a5e', '#874f3f']);
+// Pre-1900 masonry here is dominated by brownstone fronts and darker hand-made brick.
+const BROWNSTONE = palette(['#6b4a3a', '#5e4339', '#7a5644', '#5a3f33', '#7d4434', '#6e4b3e']);
+const SIDING = palette(['#e6e2d6', '#d8d3c4', '#c9cdc9', '#b9c3c6', '#d9cfb8', '#a8b0a4', '#cfc7bd', '#9aa5ab']);
+const CONCRETE = palette(['#b7b0a3', '#a9a397', '#c4beb2', '#9c978d', '#bdb5a5']);
 const PAINTED = palette(['#c8b9a4', '#d6ccb8', '#a9a39a', '#9aa3a8', '#bfae94', '#e0d8c8', '#8d8a85']);
 const GLASS = palette(['#6f8496', '#5d6e7e', '#7d93a3', '#4d5d6c', '#8a9daa', '#6b7f7a', '#95a3ad']);
 const ROOF = palette(['#4a4a4c', '#555352', '#5f5d5a', '#3f4042', '#6a6865', '#7b7a76']);
 const PLAIN = palette(['#8d8780', '#9c958c', '#7b766f']);
+const pick = (list, r) => list[Math.floor(r * list.length)];
 
+// Facade colour. Exact colours come from data where mapped (facade_color); otherwise the
+// palette follows the recorded construction material and era, and the shade is a stable guess.
 function facadeColor(b, i, style) {
   if (b.fc && /^#[0-9a-f]{6}$/i.test(b.fc)) return color(b.fc);
   const r = hash01(i * 7 + 3);
-  if (style === 'glass') return GLASS[Math.floor(r * GLASS.length)];
-  if (style === 'plain') return PLAIN[Math.floor(r * PLAIN.length)];
-  // Taller masonry buildings skew towards painted/precast; rowhouses towards brick.
+  if (style === 'glass') return pick(GLASS, r);
+  if (style === 'plain') return pick(PLAIN, r);
+  const mat = b.tax?.material || '';
+  const year = b.tax?.year;
+  if (/^frame|siding/.test(mat)) return pick(SIDING, r);
+  if (/^brick/.test(mat)) return pick(year && year < 1900 && hash01(i * 13 + 1) < 0.45 ? BROWNSTONE : BRICK, r);
+  if (/concrete|stone|stucco/.test(mat)) return pick(CONCRETE, r);
+  // Unknown material: taller buildings skew towards painted/precast, rowhouses towards brick.
   const brickChance = b.h < 16 ? 0.72 : 0.35;
-  const list = hash01(i * 13 + 1) < brickChance ? BRICK : PAINTED;
-  return list[Math.floor(r * list.length)];
+  return pick(hash01(i * 13 + 1) < brickChance ? BRICK : PAINTED, r);
 }
 
 function styleOf(b) {
   const h = b.h - (b.mh || 0);
   if (h <= 4.5 || ['roof', 'shed', 'garage', 'garages', 'carport'].includes(b.c)) return 'plain';
-  if (b.h >= 40) return 'glass';
+  if (b.h >= 40 || (b.tax?.year >= 2000 && b.h >= 25)) return 'glass';
   return 'masonry';
+}
+
+// Storey height for the window grid: the recorded storey count when it agrees with the height.
+function floorHeight(b) {
+  const st = b.tax?.storeys;
+  if (st) {
+    const fh = (b.h - (b.mh || 0)) / Math.ceil(st);
+    if (fh >= 2.4 && fh <= 6) return fh;
+  }
+  return FLOOR_M;
 }
 
 function triangulate(outer, holes) {
@@ -109,8 +130,7 @@ export function buildBuildings(list, { masonryMap, glassMap }) {
     const style = styleOf(b);
     const col = facadeColor(b, i, style);
     const buf = bufs[style];
-    // Offset the vertical texture phase a little per building so floors don't line up.
-    const vOff = style === 'glass' ? 0 : hash01(i) * 0.08;
+    const fh = floorHeight(b) * TILE;
     for (const ring of [outer, ...holes]) {
       for (let k = 0; k < ring.length; k++) {
         const a = ring[k], c = ring[(k + 1) % ring.length];
@@ -119,10 +139,11 @@ export function buildBuildings(list, { masonryMap, glassMap }) {
         // Whole number of bays per facade so windows are never sliced at corners.
         const bays = len < 2 ? 0 : Math.max(1, Math.round(len / BAY_M));
         const u1 = bays ? bays / TILE : 0.02;
-        buf.wall(a, c, bot, top, col, bays ? 0 : 0.02, u1, bot / (FLOOR_M * TILE) - vOff, top / (FLOOR_M * TILE) - vOff);
+        buf.wall(a, c, bot, top, col, bays ? 0 : 0.02, u1, bot / fh, top / fh);
       }
     }
-    const rc = ROOF[Math.floor(hash01(i * 31 + 5) * ROOF.length)];
+    // Roof colour sampled from the 2023 aerial photo; random grey only where it couldn't be.
+    const rc = b.rc ? color(b.rc) : ROOF[Math.floor(hash01(i * 31 + 5) * ROOF.length)];
     try {
       capPolygon(bufs.roof, outer, holes, top, rc);
     } catch {

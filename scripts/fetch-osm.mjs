@@ -1,5 +1,5 @@
 // Downloads OpenStreetMap features for the project area via the Overpass API.
-// Usage: node scripts/fetch-osm.mjs [osm_features] [osm_relations]
+// Usage: node scripts/fetch-osm.mjs [osm_features] [osm_pois] [osm_relations]
 import { writeFile, mkdir } from 'node:fs/promises';
 
 const ENDPOINTS = [
@@ -30,6 +30,23 @@ const QUERIES = {
   node["highway"~"street_lamp|traffic_signals"](${AREA});
 );
 out tags geom;`,
+  // Named businesses / amenities (storefront signs) and street furniture.
+  osm_pois: `[out:json][timeout:180];
+(
+  nwr["name"]["shop"](${AREA});
+  nwr["name"]["amenity"](${AREA});
+  nwr["name"]["office"](${AREA});
+  nwr["name"]["craft"](${AREA});
+  nwr["name"]["tourism"](${AREA});
+  nwr["name"]["leisure"~"fitness_centre|sports_centre"](${AREA});
+  node["highway"~"stop|give_way|bus_stop|crossing|street_lamp|traffic_signals"](${AREA});
+  node["emergency"="fire_hydrant"](${AREA});
+  node["amenity"~"bench|bicycle_rental|bicycle_parking|waste_basket|post_box|drinking_water|parking_entrance"](${AREA});
+  node["barrier"~"bollard|gate"](${AREA});
+  node["railway"~"subway_entrance|tram_stop|station"](${AREA});
+  node["entrance"](${AREA});
+);
+out tags center;`,
   // Multipolygon relations (Hudson River, parks) need full member geometry.
   osm_relations: `[out:json][timeout:180];
 (

@@ -3,6 +3,7 @@ import { Sky } from 'three/addons/objects/Sky.js';
 import { buildWorld } from './world.js';
 import { Player } from './player.js';
 import { Minimap } from './minimap.js';
+import { Inspector } from './inspector.js';
 import './style.css';
 
 const $ = (id) => document.getElementById(id);
@@ -93,6 +94,7 @@ scene.add(root);
 
 const player = new Player(camera, renderer.domElement, query);
 const minimap = new Minimap(data, $('minimap'), $('bigmap'));
+const inspector = new Inspector($('inspector'), $('crosshair'), query, data);
 
 // Place list in the UI
 const placeList = $('places');
@@ -134,6 +136,7 @@ function setMap(open) {
 }
 window.addEventListener('keydown', (ev) => {
   if (ev.code === 'KeyM') setMap(!mapOpen);
+  if (ev.code === 'KeyI') inspector.toggle();
   if (ev.code === 'Escape' && mapOpen) setMap(false);
   const digit = /^Digit([1-9])$/.exec(ev.code);
   if (digit && PLACES[digit[1] - 1]) goTo(digit[1] - 1);
@@ -184,6 +187,7 @@ renderer.setAnimationLoop((time) => {
     const compass = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(player.heading / 45) % 8];
     $('coords').textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)} · ${compass} ${Math.round(player.heading)}°${player.fly ? ` · ${Math.round(player.y)} m up` : ''}`;
     minimap.update(player.e, player.n, player.heading);
+    inspector.update(camera);
     if (mapOpen) mapPick = minimap.drawBig(player.e, player.n, player.heading);
   }
   if (fpsTime > 1) {
@@ -194,4 +198,4 @@ renderer.setAnimationLoop((time) => {
 });
 
 // Handy for debugging from the console.
-Object.assign(window, { scene, camera, player, query, data, renderer, ll: (lat, lon) => ll2local(data.meta, lat, lon) });
+Object.assign(window, { scene, camera, player, query, data, renderer, inspector, ll: (lat, lon) => ll2local(data.meta, lat, lon) });
