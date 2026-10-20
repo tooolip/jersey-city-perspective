@@ -168,13 +168,25 @@ This runs `scripts/focus/`:
   don't constrain sliding along a street: 19 of 29 reconstructions were corrected, by up to
   ~8 m, and the rest are kept as-is.
 - `facades.py`: photo-textures walls.
-  - Each 4 cm texel is projected into up to 6 photos (at most 2 per drive-through) with the
-    registered poses. Lines of sight blocked by other buildings and sky pixels are skipped.
+  - Each 4 cm texel is projected into up to 8 photos (at most 2 per drive-through) with the
+    registered poses. Photos from reconstructions that failed registration by more than ~1 m
+    are left out. Lines of sight blocked by other buildings are skipped.
+  - Sky is found per photo as bright or blue regions connected to the top of the frame;
+    nothing above the roofline in a column is used. Where a photo shows sky across the top of
+    a wall (its pose or scale is a little off; the heights match the LiDAR), the roofline is
+    fitted as a line and that photo's sample is stretched up from the base to meet the top.
+  - Per photo, masks mark what stands in front of the wall: mapped poles, lamps, signals and
+    signs and LiDAR tree trunks (ray tests), crowns, bare branches (thin dark lines), saturated
+    sign blobs and glare. A masked sample is only set aside where another photo saw the texel
+    clear, so wall details every view shares (railings, painted signs) stay.
   - Photos are matched in exposure, then combined per texel: the sample that agrees best with
-    the others wins. Parallax between drives suppresses cars and partly the street trees.
-  - Walls are lifted to normal exposure and packed into an atlas (`facades-0.jpg`). The
-    viewer textures those walls instead of the kit.
-  - About 30 walls so far.
+    the others wins, with photos taken within 3 m of each other not vouching for each other.
+    Choices are smoothed into patches.
+  - Street signs every view sees (yellow or red, sign-shaped, at sign height) and big glare
+    patches are cut out. Holes are filled from their surroundings.
+  - Walls whose overlapping photos disagree (what they show isn't on the wall plane) keep the
+    kit. The rest are lifted to normal exposure and packed into an atlas (`facades-0.jpg`).
+  - 25 walls so far. `DEBUG_WALL=<id>:<edge>` dumps one wall's per-photo samples and masks.
 
 In the viewer:
 - `P`: jump to the nearest real photo's exact pose and overlay it (`O` opacity, `⇧P` previous,
@@ -182,9 +194,10 @@ In the viewer:
 - `K`: show the SfM point cloud.
 
 Photo-facade limits: the photos here are December 2019 phone captures, mostly backlit and
-leaf-off. Bare street-tree branches, signs and some parked cars get baked into the walls, and
-roofline edges pick up a ragged band of branches against sky. Buildings finished after 2019
-show their construction stage.
+leaf-off. Where only one or two photos see a wall, dense branches, parked cars and vans still
+get baked in, and the east side of Coles Street (shot into the sun) stays hazy. Buildings
+finished after 2019 show their construction stage. The roofline stretch hides a pose error
+rather than fixing it: registration solves shift and rotation but not scale.
 
 Lessons so far:
 - Mapillary's absolute positions carry a few metres of GPS bias, so geometry comes from

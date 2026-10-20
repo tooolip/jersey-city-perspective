@@ -69,11 +69,14 @@ Every feature should trace back to a data source, and estimates should be flagge
 - Done everywhere:
   - 2014 lot surfaces under today's buildings no longer spill onto streets;
   - street furniture snapping fixed: 967 objects were standing in roadways, now 37.
-- Photo-textured facades: ~30 walls, from registered reconstructions with a multi-photo vote
-  per texel.
+- Photo-textured facades: 25 walls, from registered reconstructions with a multi-photo vote
+  per texel. Cleanup: sky and roofline per photo, masks for poles, signs, trunks, branches and
+  glare, sign cut-outs, smooth hole filling. Walls the photos disagree on keep the kit.
 - Next here:
+  - registration with scale (the roofline stretch compensates for reconstructions that sit
+    too close to the walls);
   - better facade sources: leaf-on and newer photos, or a phone walk-through capture of the
-    block; roofline cleanup;
+    block; parked cars along ground floors;
   - correct kits for converted lofts (the east loft renders as glass);
   - wall heights at the cut (ours read ~2 m taller than the photos);
   - per-object positions from SfM clusters;
