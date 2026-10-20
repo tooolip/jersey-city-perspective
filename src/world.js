@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { toPts, bbox, pointInRing, distToRing, distToSeg, Grid } from './geo.js';
-import { buildBuildings, buildEmbankment, buildLaneMarkings, buildFlatAreas, buildSeawall, buildRibbons, buildCrosswalks, buildRails, buildWater, Y } from './builders.js';
+import { buildBuildings, buildEmbankment, buildLaneMarkings, buildFlatAreas, buildSeawall, buildRibbons, buildCrosswalks, buildRails, buildWater, Y, setTerrain } from './builders.js';
 import { masonryTexture, glassTexture } from './textures.js';
-import { buildTrees, buildLamps } from './props.js';
+import { buildTrees, buildMeasuredTrees, buildLamps } from './props.js';
 import { buildSigns } from './signs.js';
 import { buildFurniture } from './furniture.js';
 
@@ -23,20 +23,31 @@ const c = (hex) => {
   return colorCache.get(hex);
 };
 
-export function buildWorld(data, renderer) {
+export function buildWorld(data, renderer, terrain) {
+  setTerrain(terrain);
   const root = new THREE.Group();
   const masonryMap = masonryTexture(renderer);
   const glassMap = glassTexture(renderer);
 
   const water = buildWater(renderer);
   root.add(water);
-  const land = buildFlatAreas(data.land, Y.land, () => c('#8f8b84'));
+  // Flat ground beyond the LiDAR grid; inside it the land polygon is draped over the terrain.
+  const land = buildFlatAreas(data.land, terrain.flat ? Y.land : terrain.fallback, () => c('#8f8b84'), { draped: false });
   land.name = 'land';
   root.add(land);
-  root.add(buildSeawall(data.land));
-  root.add(buildSeawall(data.areas.filter((a) => a.k === 'pier'), Y.area + 0.4));
+  if (data.landTerrain?.length && !terrain.flat) {
+    const draped = buildFlatAreas(data.landTerrain, Y.land, () => c('#8f8b84'), { maxEdge: 12 });
+    draped.name = 'terrain';
+    root.add(draped);
+  }
+  // Bulkheads only on real shorelines, not along the cut between the two land pieces.
+  const ext = data.terrain?.extent;
+  const onCut = ext ? (a, b) => [[0, 0], [1, 1], [2, 0], [3, 1]].some(([k, ax]) => Math.abs(a[ax] - ext[k]) < 0.5 && Math.abs(b[ax] - ext[k]) < 0.5) : () => false;
+  root.add(buildSeawall([...data.land, ...(data.landTerrain || [])], 0.02, onCut));
+  const pierLift = terrain.flat ? 0.4 : 0.05; // measured pier decks are already in the terrain
+  root.add(buildSeawall(data.areas.filter((a) => a.k === 'pier'), Y.area + pierLift));
   root.add(buildEmbankment(data.areas.filter((a) => a.emb)));
-  root.add(buildFlatAreas(data.areas.filter((a) => !a.emb), (a) => (a.k === 'pier' ? Y.area + 0.4 : Y.area), (a) => c(AREA_COLORS[a.k] || '#888888')));
+  root.add(buildFlatAreas(data.areas.filter((a) => !a.emb), (a) => (a.k === 'pier' ? Y.area + pierLift : Y.area), (a) => c(AREA_COLORS[a.k] || '#888888')));
 
   // Roads: elevated ways ramp down where they meet only ground-level streets.
   const nodeUse = new Map();
@@ -68,7 +79,8 @@ export function buildWorld(data, renderer) {
   skyline.traverse((o) => { o.castShadow = false; });
   root.add(skyline);
 
-  root.add(buildTrees(data.trees));
+  if (data.lidarTrees?.length) root.add(buildMeasuredTrees(data.lidarTrees));
+  if (data.trees.length) root.add(buildTrees(data.trees));
   if (data.raisedTrees?.length) root.add(buildTrees(data.raisedTrees, 3, 100000));
   root.add(buildLamps(data.lamps));
   root.add(buildSigns(data.signs || [], renderer));
@@ -76,7 +88,7 @@ export function buildWorld(data, renderer) {
   const query = new WorldQuery(data);
   root.add(buildFurniture(data.furniture || [], renderer, (x, y) => query.streetAt(x, y)));
 
-  return { root, query, update: (t) => water.userData.update(t) };
+  return { root, query, terrain, update: (t) => water.userData.update(t) };
 }
 
 // Collision and lookup queries in [east, north] space.

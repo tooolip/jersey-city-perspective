@@ -4,6 +4,7 @@ import { buildWorld } from './world.js';
 import { Player } from './player.js';
 import { Minimap } from './minimap.js';
 import { Inspector } from './inspector.js';
+import { Terrain } from './terrain.js';
 import './style.css';
 
 const $ = (id) => document.getElementById(id);
@@ -89,10 +90,11 @@ setStatus('Downloading map data…');
 const data = await loadCity();
 setStatus('Building the city…');
 await new Promise((r) => setTimeout(r, 30)); // let the status paint
-const { root, query, update: updateWorld } = buildWorld(data, renderer);
+const terrain = await Terrain.load(data.terrain, import.meta.env.BASE_URL);
+const { root, query, update: updateWorld } = buildWorld(data, renderer, terrain);
 scene.add(root);
 
-const player = new Player(camera, renderer.domElement, query);
+const player = new Player(camera, renderer.domElement, query, terrain);
 const minimap = new Minimap(data, $('minimap'), $('bigmap'));
 const inspector = new Inspector($('inspector'), $('crosshair'), query, data);
 
@@ -170,8 +172,9 @@ renderer.setAnimationLoop((time) => {
   // Shadow camera follows the player, snapped to texels to avoid shimmering.
   const texel = (SHADOW_R * 2) / sun.shadow.mapSize.x;
   const cx = Math.round(camera.position.x / texel) * texel, cz = Math.round(camera.position.z / texel) * texel;
-  sun.target.position.set(cx, 0, cz);
-  sun.position.set(cx + sunDir.x * 800, sunDir.y * 800, cz + sunDir.z * 800);
+  const gy = terrain.height(cx, -cz);
+  sun.target.position.set(cx, gy, cz);
+  sun.position.set(cx + sunDir.x * 800, gy + sunDir.y * 800, cz + sunDir.z * 800);
 
   renderer.render(scene, camera);
 
@@ -182,10 +185,10 @@ renderer.setAnimationLoop((time) => {
     hudTimer = 0;
     const street = query.streetAt(player.e, player.n);
     const area = query.inBounds(player.e, player.n, 0) ? 'Downtown Jersey City' : 'Outside project area';
-    $('street').textContent = player.y > 40 ? `Above ${street || area}` : street || area;
+    $('street').textContent = player.y - terrain.height(player.e, player.n) > 40 ? `Above ${street || area}` : street || area;
     const [lat, lon] = local2ll(data.meta, player.e, player.n);
     const compass = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(player.heading / 45) % 8];
-    $('coords').textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)} · ${compass} ${Math.round(player.heading)}°${player.fly ? ` · ${Math.round(player.y)} m up` : ''}`;
+    $('coords').textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)} · ${compass} ${Math.round(player.heading)}°${player.fly ? ` · ${Math.round(player.y - terrain.height(player.e, player.n))} m up` : ` · ground ${terrain.height(player.e, player.n).toFixed(1)} m`}`;
     minimap.update(player.e, player.n, player.heading);
     inspector.update(camera);
     if (mapOpen) mapPick = minimap.drawBig(player.e, player.n, player.heading);
@@ -198,4 +201,4 @@ renderer.setAnimationLoop((time) => {
 });
 
 // Handy for debugging from the console.
-Object.assign(window, { scene, camera, player, query, data, renderer, inspector, ll: (lat, lon) => ll2local(data.meta, lat, lon) });
+Object.assign(window, { scene, camera, player, query, data, renderer, inspector, terrain, ll: (lat, lon) => ll2local(data.meta, lat, lon) });

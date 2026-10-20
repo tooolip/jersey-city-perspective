@@ -11,7 +11,7 @@ Every feature should trace back to a data source, and estimates should be flagge
 | **NJ Parcels + MOD-IV tax records** ([service](https://services2.arcgis.com/XVOqAjTOJ5P6ngMu/ArcGIS/rest/services/Parcels_Composite_NJ_WM/FeatureServer/0)) | ~12.4k parcels here: lot polygons, address, property class, **storeys** (`3S`, `2.5S`), units, construction hints (`B` brick, `F` frame), **year built**, lot frontage × depth (ft) | ArcGIS REST, 2000 records/page | NJ public record (owner names redacted; we don't download them) |
 | **USDA NAIP 2023** ([Planetary Computer](https://planetarycomputer.microsoft.com/dataset/naip)) | **30 cm** RGB+NIR aerial photo; one tile covers the whole area | Cloud-optimized GeoTIFF, windowed reads | Public domain |
 | NJ 2020 orthophotos ([maps.nj.gov](https://maps.nj.gov/arcgis/rest/services/Basemap/Orthos_Natural_2020_NJ_WM/MapServer)) | 1 ft RGB, as a fallback or cross-check | Cached tiles / WMTS | NJ public |
-| **USGS 3DEP LiDAR**: `NY_NewYorkCity` (2017, **has RGB per point**) and `NJ_SdL5_2014` | Ground/terrain, roof shapes and setbacks, tree positions and canopy heights | Entwine Point Tiles on S3 (`usgs-lidar-public`) | Public domain |
+| **USGS 3DEP LiDAR** (in use): `NJ_SdL5_2014` (~8 pts/m² here); `NY_NewYorkCity` 2017 is sparse over JC (~2.4 pts/m²) | Terrain, roof levels, tree positions and heights. No building/vegetation classes, so those are derived | Entwine Point Tiles on S3 (`usgs-lidar-public`) | Public domain |
 | Overture buildings (in use) | Footprints, heights (mostly USGS LiDAR) | GeoParquet via CLI | ODbL / CDLA |
 | **Overture places** | Business names and categories (Meta/Microsoft-sourced), far denser than OSM | GeoParquet via CLI | CDLA-Permissive |
 | **OpenStreetMap** (in use) | Streets, lanes, crossings, signals, stop signs, hydrants, benches, bus stops, Citi Bike docks, shop names, building colours | Overpass | ODbL |
@@ -39,10 +39,14 @@ Every feature should trace back to a data source, and estimates should be flagge
 - Still open: curbs and real sidewalk widths, crosswalk styles (ladder vs. standard),
   signal mast arms, and refreshing old (2019) detections where newer photos exist.
 
-### M3: LiDAR geometry
-- Terrain from ground-classified points (small grades, the Bergen Hill rise west of the Turnpike).
-- Tree positions, heights and crown sizes from vegetation returns, replacing the procedural trees.
-- Roof shapes, setbacks and rooftop structures (bulkheads, water tanks) from first returns.
+### M3: LiDAR geometry (done)
+- Terrain from ground returns (NJ 2014, ~8 pts/m²): a 3 m grid in metres above sea level, with
+  everything draped or standing on it.
+- ~4,500 measured trees (position, height, crown), checked against 2023 infrared imagery.
+- Roof levels as extruded parts on ~220 buildings; embankment deck heights measured per block.
+- Still open: trees planted after 2014, pitched roofs (gable/hip planes from LiDAR), water tanks
+  as cylinders, merging the NYC 2017 survey where it's denser, and newer LiDAR when USGS publishes
+  a post-2014 Hudson County survey.
 
 ### M4: Facade truth
 - Facade colours from street-level imagery (Mapillary), sampled per building and flagged by confidence.

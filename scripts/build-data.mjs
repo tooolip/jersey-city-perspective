@@ -7,6 +7,7 @@ import { loadParcels, joinBuildingsToParcels } from './lib/parcels.mjs';
 import { loadImagery, sampleRoofColours } from './lib/roof-colours.mjs';
 import { collectBusinesses, placeSigns } from './lib/signs.mjs';
 import { buildStreetFurniture } from './lib/street.mjs';
+import { loadLidar, buildTerrain } from './lib/lidar.mjs';
 import { segIntersect, pointInRing, distToSeg, distToRing, toPts, bbox, centroid, ringArea, openRing, assembleRings, Grid } from './lib/geom.mjs';
 
 const ORIGIN = { lat: 40.724, lon: -74.042 };
@@ -41,6 +42,8 @@ const osmPois = (await optional('data/raw/osm_pois.json'))?.elements || [];
 const places = (await optional('data/raw/overture_places.geojson'))?.features || [];
 const imagery = await loadImagery();
 const mapillary = (await optional('data/raw/mapillary_features.json')) || [];
+const lidar = await loadLidar();
+if (!lidar) console.warn('(missing data/derived LiDAR products; run scripts/fetch-lidar.py + process-lidar.py)');
 if (!imagery) console.warn('(missing data/raw/naip.rgb; run scripts/fetch-imagery.py)');
 
 // ---------------------------------------------------------------- boundary
@@ -118,7 +121,7 @@ function convertBuildings(features, filter) {
       const area = Math.abs(ringArea(outer));
       if (area < 6) continue;
       const cls = pr.class || pr.subtype;
-      const b = { o: outer.flat(), h: Math.round(heightOf(pr, area) * 10) / 10 };
+      const b = { o: outer.flat(), h: Math.round(heightOf(pr, area) * 10) / 10, _id: pr.id };
       if (rings.length > 1) b.holes = rings.slice(1).filter((r) => r.length >= 3).map((r) => r.flat());
       if (pr.min_height) b.mh = pr.min_height;
       // Free-standing roofs (gas-station / toll canopies) are slabs you can walk under.
@@ -142,6 +145,26 @@ const skyline = convertBuildings(ovMH, (c) => c[0] > 1200);
 // Tax records (storeys, year built, construction, address) and roof colours from the aerial photo.
 const parcelStats = parcelsRaw ? joinBuildingsToParcels(buildings, loadParcels(parcelsRaw, proj)) : 0;
 const roofStats = imagery ? sampleRoofColours(buildings, imagery, unproj) : 0;
+
+// LiDAR roof levels: towers on podiums, setbacks, rear extensions, rooftop bulkheads.
+let lidarRoofs = 0, lidarAbsent = 0;
+if (lidar) {
+  for (const b of buildings) {
+    const r = lidar.roofs.roofs[b._id];
+    if (!r) continue;
+    if (r.absent) { b.lid = 'absent'; lidarAbsent++; continue; } // not there in 2014: keep Overture shape
+    b.lid = 1;
+    if (r.parts?.length) {
+      b.parts = r.parts;
+      b.h = Math.max(r.base, 2.5);
+      if (b.est) b.est = undefined;
+      lidarRoofs++;
+    } else if (b.est && r.base >= 2.5) {
+      b.h = r.base;
+      b.est = undefined;
+    }
+  }
+}
 
 // ---------------------------------------------------------------- roads & rail
 const ROAD_WIDTH = {
@@ -280,7 +303,7 @@ const waterGeom = water.map((w) => [w.o, ...(w.holes || [])].map((flat) => {
   r.push(r[0]);
   return r;
 }));
-const land = polygonClipping.difference([LAND_RECT], ...waterGeom.map((g) => [g])).map((poly) => {
+let land = polygonClipping.difference([LAND_RECT], ...waterGeom.map((g) => [g])).map((poly) => {
   const rings = poly.map((r) => openRing(r).flat());
   return rings.length > 1 ? { o: rings[0], holes: rings.slice(1) } : { o: rings[0] };
 });
@@ -388,6 +411,35 @@ trees.length = 0;
 const raisedTrees = []; // [east, north, base height]
 for (const p of treeSet) (p.length > 2 ? raisedTrees : trees).push(...p);
 
+// ---------------------------------------------------------------- LiDAR terrain + trees
+let terrain = null;
+let landTerrain = [];
+const lidarTrees = []; // [east, north, ground z, height, crown radius]
+if (lidar) {
+  const embAreas = areas.filter((a) => a.emb);
+  const t = buildTerrain(lidar.dtm, { embankments: embAreas });
+  // Measured heights; 0 means LiDAR shows no raised deck there, so it's a plain area after all.
+  t.embHeights.forEach((h, i) => { if (h) embAreas[i].emb = h; else if (h === 0) delete embAreas[i].emb; });
+  await mkdir('public/data', { recursive: true });
+  await writeFile('public/data/terrain.bin', Buffer.from(t.cm.buffer));
+  terrain = { ...t.grid, file: 'terrain.bin', source: lidar.dtm.dataset };
+  // Land inside the terrain grid is draped over it (keeping exact shorelines); outside it's flat.
+  const [tx0, ty0, tx1, ty1] = t.grid.extent;
+  const hole = rect(tx0, ty0, tx1, ty1);
+  const landGeom = land.map((l) => [l.o, ...(l.holes || [])].map((f) => { const r = toPts(f); r.push(r[0]); return r; }));
+  const back = (poly) => { const rings = poly.map((r) => openRing(r).flat()); return rings.length > 1 ? { o: rings[0], holes: rings.slice(1) } : { o: rings[0] }; };
+  landTerrain = polygonClipping.intersection(landGeom, [hole]).map(back);
+  land = polygonClipping.difference(landGeom, [hole]).map(back);
+  // Measured trees replace generated ones inside the LiDAR extent.
+  const inExtent = (x, y) => x > tx0 && x < tx1 && y > ty0 && y < ty1;
+  for (const tr of lidar.trees.trees) if (inScope([tr[0], tr[1]])) lidarTrees.push(...tr);
+  const keep = [];
+  for (let i = 0; i < trees.length; i += 2) if (!inExtent(trees[i], trees[i + 1])) keep.push(trees[i], trees[i + 1]);
+  trees.length = 0;
+  trees.push(...keep);
+  raisedTrees.length = 0;
+}
+
 // ---------------------------------------------------------------- storefront signs
 const businesses = collectBusinesses(osmPois, places, proj).filter((b) => inScope(b.p, 60));
 const { signs, skipped: signsSkipped } = placeSigns(businesses, buildings, roads);
@@ -414,6 +466,7 @@ const city = {
       'Storeys, year built, construction, addresses: NJ Parcels & MOD-IV tax records (NJOGIS)',
       imagery ? `Roof colours: USDA NAIP ${imagery.date} aerial photo (30 cm, public domain)` : null,
       'Additional business names: Overture Maps places (CDLA-Permissive-2.0)',
+      lidar ? `Terrain, trees, roof levels: USGS 3DEP LiDAR (${lidar.dtm.dataset}), trees checked against NAIP ${lidar.trees.ndvi_year} infrared` : null,
       mapillary.length ? 'Street furniture & traffic signs: Mapillary map features (CC-BY-SA), positions triangulated from street-level photos' : null,
     ].filter(Boolean),
     contextMeters: CONTEXT_M,
@@ -428,14 +481,18 @@ const city = {
   areas,
   water,
   land,
+  landTerrain,
+  terrain,
   trees,
   raisedTrees,
+  lidarTrees,
   lamps,
   signals,
   signs,
   furniture,
 };
 
+for (const b of [...buildings, ...skyline]) delete b._id;
 await mkdir('public/data', { recursive: true });
 const json = JSON.stringify(city);
 await writeFile('public/data/city.json', json);
@@ -450,4 +507,5 @@ console.log(`businesses ${businesses.length} -> signs ${signs.length} (osm ${sig
 const fk = furniture.reduce((a, f) => ((a[f.k] = (a[f.k] || 0) + 1), a), {});
 console.log(`furniture ${furniture.length} (mapillary ${street.fromMly}, osm ${street.fromOsm}, sign posts ${street.posts}), generated lamps ${lamps.length / 2}`);
 console.log('  ' + Object.entries(fk).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', '));
+if (lidar) console.log(`LiDAR: terrain ${terrain.w}x${terrain.h} @${terrain.res}m, trees ${lidarTrees.length / 5} (+${trees.length / 2} generated outside), roofs with parts ${lidarRoofs}, not in 2014 scan ${lidarAbsent}, embankment heights ${areas.filter((a) => a.emb).map((a) => a.emb).join('/')}`);
 console.log(`boundary ${boundary.length} pts; wrote public/data/city.json (${(json.length / 1e6).toFixed(2)} MB)`);

@@ -8,10 +8,11 @@ const RADIUS = 0.35;
 
 // First-person controller. Position is stored in [east, north]; three.js z = -north.
 export class Player {
-  constructor(camera, dom, query) {
+  constructor(camera, dom, query, terrain) {
     this.camera = camera;
     this.dom = dom;
     this.query = query;
+    this.ground = (e, n) => terrain.height(e, n);
     this.e = 0;
     this.n = 0;
     this.y = EYE;
@@ -37,7 +38,7 @@ export class Player {
       if (ev.target instanceof HTMLInputElement) return;
       this.keys.add(ev.code);
       if (ev.code === 'KeyF') this.toggleFly();
-      if (ev.code === 'Space' && !this.fly && this.y <= EYE + 1e-3) this.vy = JUMP;
+      if (ev.code === 'Space' && !this.fly && this.onGround) this.vy = JUMP;
     });
     window.addEventListener('keyup', (ev) => this.keys.delete(ev.code));
     window.addEventListener('blur', () => this.keys.clear());
@@ -50,7 +51,7 @@ export class Player {
   // heading: compass degrees (0 = north, 90 = east)
   teleport(e, n, heading = null) {
     [this.e, this.n] = this.query.nearestWalkable(e, n);
-    if (!this.fly) this.y = EYE;
+    if (!this.fly) this.y = this.ground(this.e, this.n) + EYE;
     if (heading !== null) {
       this.yaw = (-heading * Math.PI) / 180;
       this.pitch = 0;
@@ -65,10 +66,10 @@ export class Player {
   toggleFly() {
     this.fly = !this.fly;
     if (this.fly) {
-      this.y = Math.max(this.y, 40);
+      this.y = Math.max(this.y, this.ground(this.e, this.n) + 40);
     } else {
       [this.e, this.n] = this.query.nearestWalkable(this.e, this.n);
-      this.y = EYE;
+      this.y = this.ground(this.e, this.n) + EYE;
       this.vy = 0;
     }
     this.onModeChange?.(this.fly);
@@ -96,7 +97,7 @@ export class Player {
       this.e = ne;
       this.n = nn;
       const up = (k.has('KeyE') || k.has('Space') ? 1 : 0) - (k.has('KeyQ') ? 1 : 0);
-      this.y = Math.max(EYE, this.y + up * speed * 0.6 * dt);
+      this.y = Math.max(this.ground(this.e, this.n) + EYE, this.y + up * speed * 0.6 * dt);
     } else {
       // Slide along walls: try the full step, then each axis on its own.
       const q = this.query;
@@ -104,13 +105,16 @@ export class Player {
       else if (q.isWalkable(ne, this.n, RADIUS)) { this.e = ne; this.vel.y = 0; }
       else if (q.isWalkable(this.e, nn, RADIUS)) { this.n = nn; this.vel.x = 0; }
       else this.vel.set(0, 0);
+      // Follow the ground: step up slopes immediately, drop to it under gravity.
+      const floor = this.ground(this.e, this.n) + EYE;
       this.vy -= GRAVITY * dt;
       this.y += this.vy * dt;
-      if (this.y < EYE) { this.y = EYE; this.vy = 0; }
+      if (this.y <= floor || (this.onGround && this.y - floor < 0.25 && this.vy <= 0)) { this.y = floor; this.vy = 0; }
     }
+    this.onGround = !this.fly && this.y <= this.ground(this.e, this.n) + EYE + 1e-3;
 
     // Gentle head bob while walking on foot.
-    const moving = !this.fly && this.y <= EYE + 1e-3 ? Math.hypot(this.vel.x, this.vel.y) : 0;
+    const moving = this.onGround ? Math.hypot(this.vel.x, this.vel.y) : 0;
     this.bob = (this.bob || 0) + moving * dt * 1.9;
     const bobY = Math.sin(this.bob * 2) * 0.035 * Math.min(1, moving / WALK);
 

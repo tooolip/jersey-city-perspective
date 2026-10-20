@@ -35,17 +35,20 @@ The browser loads one pre-built file, `public/data/city.json`, with everything i
 
 ```bash
 # One-time Python setup (Overture CLI + raster tools)
-python3 -m venv .venv && .venv/bin/pip install overturemaps rasterio numpy
+python3 -m venv .venv && .venv/bin/pip install overturemaps rasterio numpy scipy shapely "laspy[lazrs]"
 
 npm run fetch:osm       # OpenStreetMap: streets, rail, parks, water, businesses, street furniture
 npm run fetch:overture  # Overture buildings (+ Manhattan) and places
 npm run fetch:parcels   # NJ tax parcels with MOD-IV records (no owner names)
 npm run fetch:imagery   # USDA NAIP 2023 30 cm aerial photo (~250 MB)
 npm run fetch:mapillary # Mapillary traffic signs + street objects (needs MAPILLARY_TOKEN)
+npm run fetch:lidar     # USGS LiDAR point cloud, streamed into height grids (~36M points)
+npm run process:lidar   # -> terrain, trees, roof levels in data/derived/
 npm run build:data      # -> public/data/city.json
 ```
 
-Parcels, places, imagery and Mapillary are optional: the build skips any that are missing.
+Parcels, places, imagery, Mapillary and LiDAR are optional: the build skips any that are missing.
+Without LiDAR the scene falls back to flat ground and generated trees.
 For Mapillary, put a client token from mapillary.com/dashboard/developers in `.env.local`
 (git-ignored) as `MAPILLARY_TOKEN=MLY|...`, or set it in the environment.
 
@@ -78,16 +81,28 @@ Raw downloads go in `data/raw/` (git-ignored).
   dashed white lines between same-direction lanes, clear of intersections.
 - **Everything else:** © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors,
   ODbL, via the Overpass API.
-- **Generated:** OSM maps only ~120 trees here, so street trees (every ~8 m along sidewalks) and
-  park/wood trees are placed procedurally with a fixed seed. Generated lamps (~every 32 m) now
-  appear only where no real street light is within 35 m (~150 remain).
+- **Terrain, trees, roof levels:** USGS 3DEP LiDAR (NJ 2014 post-Sandy survey, ~8 points/m²,
+  public domain).
+  - *Terrain:* ground returns, gaps under buildings filled, exported as a 3 m grid in metres above
+    NAVD88 (≈ sea level). Street level here is 1.5–4 m; Bergen Hill rises past 20 m west of the
+    Turnpike. The river sits at 0.2 m, with bulkheads down to the bed.
+  - *Trees (~4,500):* canopy is where the laser passed through foliage (multiple returns).
+    Each tree is a local height peak with its real height, and its crown is sized from the canopy
+    around it. Trees with no vegetation in the 2023 NAIP infrared photo are dropped (~1,800 gone
+    since 2014). Trees planted after 2014 are still missing.
+  - *Roof levels:* each footprint's height profile is split into levels, which become extruded
+    parts: towers on podiums, setbacks, rear extensions, rooftop bulkheads (~220 buildings).
+    74 buildings aren't in the 2014 scan (probably built since) and keep their Overture shape.
+  - *Sixth Street Embankment:* deck height measured per block from the top surface: 3.0 m at the
+    east end, rising to 7.9 m westward along the old rail grade.
+- **Generated:** street trees only outside the LiDAR area. Generated lamps (~every 32 m) appear only
+  where no real street light is within 35 m (~150 remain).
 
 ### Modeling notes
 
-- The ground is flat at street level. Downtown JC sits only a few meters above the river, so
-  terrain is left for later.
-- The river is a plane 1.6 m below the street, with a bulkhead wall wherever land meets water.
-  Land is computed as the world minus the OSM water polygons.
+- Everything sits on the LiDAR terrain. Ground layers (land, parks, roads, sidewalks, markings,
+  rails) are subdivided and draped over it. Buildings stand on the lowest ground point of their
+  footprint. Land is the world minus the OSM water polygons, so shorelines are exact.
 - Elevated roads (OSM `bridge`/`layer`) are raised 6.5 m per layer, with pillars, and ramp down
   where they meet ground-level streets. Tunnels are skipped.
 - The Sixth Street (Harsimus Stem) Embankment is raised into 7.5 m stone blocks with trees on top.
@@ -105,12 +120,15 @@ scripts/fetch-overture.sh   Overture building downloads
 scripts/fetch-parcels.mjs   NJ parcels + MOD-IV download
 scripts/fetch-imagery.py    NAIP aerial photo download (windowed read, reprojected)
 scripts/fetch-mapillary.mjs Mapillary map features download (tiled)
+scripts/fetch-lidar.py      LiDAR (Entwine Point Tiles) streamed into ground/surface grids
+scripts/process-lidar.py    Terrain, tree detection (+ NDVI check), roof-level parts
 scripts/build-data.mjs      Projection, boundary, clipping, land/water, generated trees & lamps
 scripts/lib/                Parcel join, roof colours, storefront signs, street furniture, geometry
 src/main.js                 Renderer, sky/sun/shadows, HUD, landmarks, main loop
 src/world.js                Builds the scene from city.json; collision & street-name queries
 src/builders.js             Mesh builders: buildings, ground areas, roads, rails, water, seawall
-src/props.js                Instanced trees and street lamps
+src/terrain.js              Terrain height sampling and draping of ground layers
+src/props.js                Instanced trees (LiDAR-measured and generated) and street lamps
 src/signs.js                Storefront signs (text atlases, brand colours) and glazing
 src/furniture.js            Street furniture models, traffic-sign faces, road decals
 src/inspector.js            Building / street-object inspector panel

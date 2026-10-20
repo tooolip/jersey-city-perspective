@@ -12,6 +12,8 @@
     "fetch:parcels": "node scripts/fetch-parcels.mjs",
     "fetch:imagery": ".venv/bin/python scripts/fetch-imagery.py",
     "fetch:mapillary": "node scripts/fetch-mapillary.mjs",
+    "fetch:lidar": ".venv/bin/python -I scripts/fetch-lidar.py",
+    "process:lidar": ".venv/bin/python -I scripts/process-lidar.py",
     "build:data": "node scripts/build-data.mjs"
   },
   "dependencies": {

@@ -1,13 +1,23 @@
 import * as THREE from 'three';
 import { toPts, orient, hash01 } from './geo.js';
+import { Terrain, drape } from './terrain.js';
 
 export const BAY_M = 3.2; // window bay width
 export const FLOOR_M = 3.4; // storey height
 const TILE = 4; // bays/floors per texture tile
-export const WATER_Y = -1.6; // river surface relative to street level
 
-// Layer heights for coplanar ground features (logarithmic depth buffer keeps these stable).
+// Layer heights above the ground for coplanar features (logarithmic depth buffer keeps these
+// stable). Draped layers need a little more separation to absorb interpolation differences.
 export const Y = { land: 0, area: 0.03, path: 0.05, road: 0.07, mark: 0.09, rail: 0.08 };
+
+// Ground the builders sit things on. world.js sets it before building anything.
+let T = new Terrain(null, null);
+export function setTerrain(terrain) {
+  T = terrain;
+  if (!terrain.flat) Object.assign(Y, { area: 0.05, path: 0.08, road: 0.11, mark: 0.14, rail: 0.12 });
+}
+export const ground = (e, n) => T.height(e, n);
+const minGround = (ring) => ring.reduce((m, p) => Math.min(m, T.height(p[0], p[1])), Infinity);
 
 // Accumulates non-indexed triangles.
 class GeoBuffer {
@@ -31,24 +41,27 @@ class GeoBuffer {
     this.v(b[0], y, -b[1], 0, 1, 0, 0, 0, col);
     this.v(c[0], y, -c[1], 0, 1, 0, 0, 0, col);
   }
-  // Vertical quad a->b, outward normal on the right-hand side of a->b.
-  wall(a, b, y0, y1, col, u0 = 0, u1 = 0, v0 = 0, v1 = 0) {
+  // Vertical quad a->b, outward normal on the right-hand side of a->b. Bottom/top heights can
+  // differ at each end (ya0/yb0, ya1/yb1) for walls that follow the ground.
+  wall(a, b, y0, y1, col, u0 = 0, u1 = 0, v0 = 0, v1 = 0, yb0 = y0, yb1 = y1) {
     const de = b[0] - a[0], dn = b[1] - a[1];
     const len = Math.hypot(de, dn) || 1;
     const nx = dn / len, nz = de / len;
-    const A = [a[0], y0, -a[1], u0, v0], B = [b[0], y0, -b[1], u1, v0];
-    const C = [b[0], y1, -b[1], u1, v1], D = [a[0], y1, -a[1], u0, v1];
+    const A = [a[0], y0, -a[1], u0, v0], B = [b[0], yb0, -b[1], u1, v0];
+    const C = [b[0], yb1, -b[1], u1, v1], D = [a[0], y1, -a[1], u0, v1];
     for (const p of [A, B, C, A, C, D]) this.v(p[0], p[1], p[2], nx, 0, nz, p[3], p[4], col);
   }
   get count() {
     return this.pos.length / 3;
   }
-  toGeometry() {
+  // draped: subdivide and lift onto the terrain (y values become offsets above the ground).
+  toGeometry(draped = false, maxEdge = 7) {
+    let attrs = { position: { array: this.pos, size: 3 }, normal: { array: this.nrm, size: 3 } };
+    if (this.uv) attrs.uv = { array: this.uv, size: 2 };
+    if (this.col) attrs.color = { array: this.col, size: 3 };
+    if (draped) attrs = drape(attrs, T, maxEdge);
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.nrm, 3));
-    if (this.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2));
-    if (this.col) g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
+    for (const [name, { array, size }] of Object.entries(attrs)) g.setAttribute(name, new THREE.Float32BufferAttribute(array, size));
     g.computeBoundingSphere();
     return g;
   }
@@ -127,27 +140,44 @@ export function buildBuildings(list, { masonryMap, glassMap }) {
     const holes = (b.holes || []).map((h) => orient(toPts(h), false));
     const top = b.h, bot = b.mh || 0;
     if (top - bot < 0.5 || outer.length < 3) return;
+    // Buildings stand on the lowest ground point of their footprint; walls run below grade uphill.
+    const base = minGround(outer);
+    b._base = base;
+    b._top = base + Math.max(top, ...(b.parts || []).map((p) => p.h));
     const style = styleOf(b);
     const col = facadeColor(b, i, style);
     const buf = bufs[style];
     const fh = floorHeight(b) * TILE;
-    for (const ring of [outer, ...holes]) {
-      for (let k = 0; k < ring.length; k++) {
-        const a = ring[k], c = ring[(k + 1) % ring.length];
-        const len = Math.hypot(c[0] - a[0], c[1] - a[1]);
-        if (len < 0.05) continue;
-        // Whole number of bays per facade so windows are never sliced at corners.
-        const bays = len < 2 ? 0 : Math.max(1, Math.round(len / BAY_M));
-        const u1 = bays ? bays / TILE : 0.02;
-        buf.wall(a, c, bot, top, col, bays ? 0 : 0.02, u1, bot / fh, top / fh);
-      }
-    }
+    const extrude = (rings, y0, y1) => {
+      for (const ring of rings)
+        for (let k = 0; k < ring.length; k++) {
+          const a = ring[k], c = ring[(k + 1) % ring.length];
+          const len = Math.hypot(c[0] - a[0], c[1] - a[1]);
+          if (len < 0.05) continue;
+          // Whole number of bays per facade so windows are never sliced at corners.
+          const bays = len < 2 ? 0 : Math.max(1, Math.round(len / BAY_M));
+          const u1 = bays ? bays / TILE : 0.02;
+          buf.wall(a, c, base + y0, base + y1, col, bays ? 0 : 0.02, u1, y0 / fh, y1 / fh);
+        }
+    };
+    extrude([outer, ...holes], bot, top);
     // Roof colour sampled from the 2023 aerial photo; random grey only where it couldn't be.
     const rc = b.rc ? color(b.rc) : ROOF[Math.floor(hash01(i * 31 + 5) * ROOF.length)];
     try {
-      capPolygon(bufs.roof, outer, holes, top, rc);
+      capPolygon(bufs.roof, outer, holes, base + top, rc);
     } catch {
       /* degenerate footprint */
+    }
+    // Raised roof levels measured by LiDAR (towers, setbacks, bulkheads), stacked on the roof.
+    for (const p of b.parts || []) {
+      const ring = orient(toPts(p.o), true);
+      if (ring.length < 3 || p.h - p.mh < 0.5) continue;
+      extrude([ring], p.mh, p.h);
+      try {
+        capPolygon(bufs.roof, ring, [], base + p.h, rc);
+      } catch {
+        /* skip */
+      }
     }
   });
 
@@ -169,8 +199,9 @@ export function buildBuildings(list, { masonryMap, glassMap }) {
   return group;
 }
 
-// Flat filled polygons (land, parks, plazas...) with a colour per kind.
-export function buildFlatAreas(list, y, colorOf) {
+// Filled ground polygons (parks, plazas...) with a colour per kind. Draped over the terrain
+// unless `draped` is false (the huge flat land polygon beyond the terrain grid).
+export function buildFlatAreas(list, y, colorOf, { draped = true, maxEdge = 7 } = {}) {
   const buf = new GeoBuffer();
   for (const a of list) {
     const col = colorOf(a);
@@ -184,7 +215,7 @@ export function buildFlatAreas(list, y, colorOf) {
       /* skip */
     }
   }
-  const mesh = new THREE.Mesh(buf.toGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
+  const mesh = new THREE.Mesh(buf.toGeometry(draped, maxEdge), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
   mesh.receiveShadow = true;
   return mesh;
 }
@@ -196,9 +227,12 @@ export function buildEmbankment(areas) {
   const stone = color('#7d7263'), green = color('#56743f');
   for (const a of areas) {
     const outer = orient(toPts(a.o), true);
-    for (let k = 0; k < outer.length; k++) walls.wall(outer[k], outer[(k + 1) % outer.length], 0, a.emb, stone);
+    // Deck height measured by LiDAR above the street beside it; the deck is level.
+    const deck = outer.reduce((s, p) => s + ground(p[0], p[1]), 0) / outer.length + a.emb;
+    const base = minGround(outer) - 0.5;
+    for (let k = 0; k < outer.length; k++) walls.wall(outer[k], outer[(k + 1) % outer.length], base, deck, stone);
     try {
-      capPolygon(top, outer, [], a.emb, green);
+      capPolygon(top, outer, [], deck, green);
     } catch {
       /* skip */
     }
@@ -212,8 +246,9 @@ export function buildEmbankment(areas) {
   return group;
 }
 
-// Vertical bulkhead along every land edge that meets the river.
-export function buildSeawall(land, top = 0.02) {
+// Vertical bulkhead along every land edge that meets the river, from the river bed up to the
+// ground at the shoreline.
+export function buildSeawall(land, top = 0.02, skipEdge = () => false) {
   const buf = new GeoBuffer();
   const col = color('#6d6961');
   for (const l of land) {
@@ -221,8 +256,15 @@ export function buildSeawall(land, top = 0.02) {
     for (const ring of rings)
       for (let k = 0; k < ring.length; k++) {
         const a = ring[k], b = ring[(k + 1) % ring.length];
-        if (Math.max(Math.abs(a[0]), Math.abs(a[1]), Math.abs(b[0]), Math.abs(b[1])) > 29000) continue;
-        buf.wall(a, b, WATER_Y - 2, top, col);
+        if (Math.max(Math.abs(a[0]), Math.abs(a[1]), Math.abs(b[0]), Math.abs(b[1])) > 29000 || skipEdge(a, b)) continue;
+        // Long edges get split so the top follows the ground.
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        const n = Math.max(1, Math.ceil(len / 6));
+        for (let s = 0; s < n; s++) {
+          const p = [a[0] + ((b[0] - a[0]) * s) / n, a[1] + ((b[1] - a[1]) * s) / n];
+          const q = [a[0] + ((b[0] - a[0]) * (s + 1)) / n, a[1] + ((b[1] - a[1]) * (s + 1)) / n];
+          buf.wall(p, q, T.bed, ground(p[0], p[1]) + top, col, 0, 0, 0, 0, T.bed, ground(q[0], q[1]) + top);
+        }
       }
   }
   const mesh = new THREE.Mesh(buf.toGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
@@ -320,8 +362,8 @@ export function buildRibbons(list, { y, colorOf, caps = true, elevated = null })
       // Deck edges and pillars where the road is actually raised.
       if (Math.max(y0, y1) > 1.5) {
         const t = 1.3;
-        deck.wall(right[i], right[i + 1], Math.max(0, y0 - t), y0 + 0.9, deckCol);
-        deck.wall(left[i + 1], left[i], Math.max(0, y1 - t), y1 + 0.9, deckCol);
+        deck.wall(right[i], right[i + 1], Math.max(0, y0 - t), y0 + 0.9, deckCol, 0, 0, 0, 0, Math.max(0, y1 - t), y1 + 0.9);
+        deck.wall(left[i + 1], left[i], Math.max(0, y1 - t), y1 + 0.9, deckCol, 0, 0, 0, 0, Math.max(0, y0 - t), y0 + 0.9);
         const segLen = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
         for (let d = 0; d < segLen; d += 28) {
           const f = d / segLen;
@@ -342,12 +384,12 @@ export function buildRibbons(list, { y, colorOf, caps = true, elevated = null })
     }
   }
   const group = new THREE.Group();
-  const surface = new THREE.Mesh(buf.toGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }));
+  const surface = new THREE.Mesh(buf.toGeometry(true), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }));
   surface.receiveShadow = true;
   surface.castShadow = !!elevated;
   group.add(surface);
   if (deck.count) {
-    const m = new THREE.Mesh(deck.toGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: THREE.DoubleSide }));
+    const m = new THREE.Mesh(deck.toGeometry(true, 8), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: THREE.DoubleSide }));
     m.castShadow = m.receiveShadow = true;
     group.add(m);
   }
@@ -358,7 +400,7 @@ export function buildRibbons(list, { y, colorOf, caps = true, elevated = null })
     const m4 = new THREE.Matrix4();
     pillars.forEach(([e, n, h, w], i) => {
       m4.makeScale(1.4, h, Math.min(w * 0.6, 6));
-      m4.setPosition(e, 0, -n);
+      m4.setPosition(e, ground(e, n), -n);
       inst.setMatrixAt(i, m4);
     });
     inst.castShadow = inst.receiveShadow = true;
@@ -390,7 +432,7 @@ export function buildCrosswalks(paths) {
       }
     }
   }
-  const mesh = new THREE.Mesh(buf.toGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }));
+  const mesh = new THREE.Mesh(buf.toGeometry(true), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }));
   mesh.receiveShadow = true;
   return mesh;
 }
@@ -454,7 +496,7 @@ export function buildWater(renderer, size = 60000) {
     color: '#16303c', roughness: 0.08, metalness: 0.05, normalMap, normalScale: new THREE.Vector2(0.22, 0.22), envMapIntensity: 1.4,
   });
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = WATER_Y;
+  mesh.position.y = T.waterLevel;
   mesh.receiveShadow = true;
   mesh.name = 'water';
   // Drift the ripples with the tide.
@@ -560,7 +602,7 @@ export function buildLaneMarkings(roads) {
         for (const o of offsets) stripe(seg, o, 0.06, white);
       }
   }
-  const mesh = new THREE.Mesh(buf.toGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }));
+  const mesh = new THREE.Mesh(buf.toGeometry(true), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }));
   mesh.receiveShadow = true;
   mesh.name = 'lane-markings';
   return mesh;

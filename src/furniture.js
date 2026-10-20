@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { Y } from './builders.js';
+import { Y, ground } from './builders.js';
 
 // Street furniture at the positions Mapillary photo detections (or OSM) put it. Shapes and
 // sizes follow US norms; finishes are generic unless noted.
@@ -466,9 +466,11 @@ function pushQuad(arr, { x, y, z, d, w, h, uv, flat = false, offset = 0 }) {
     ];
   }
   const n = flat ? [0, 1, 0] : [fx, 0, -fy];
+  const g0 = ground(x, y);
   for (const k of [0, 1, 2, 0, 2, 3]) {
     const [e, nn, up, u, v] = corners[k];
-    arr.pos.push(e, up, -nn);
+    // Decals follow the ground at each corner; upright faces sit on the ground at their post.
+    arr.pos.push(e, up + (flat ? ground(e, nn) : g0), -nn);
     arr.uv.push(u, v);
     arr.nrm.push(...n);
   }
@@ -492,7 +494,7 @@ export function buildFurniture(items, renderer, streetAt) {
     const inst = new THREE.InstancedMesh(geo, mat, list.length);
     list.forEach((it, i) => {
       q.setFromAxisAngle(up, (-(it.d || 0) * Math.PI) / 180);
-      m.compose(p.set(it.x, 0, -it.y), q, s);
+      m.compose(p.set(it.x, ground(it.x, it.y), -it.y), q, s);
       inst.setMatrixAt(i, m);
     });
     inst.castShadow = !['manhole', 'drain'].includes(kind);
@@ -571,7 +573,7 @@ export function buildFurniture(items, renderer, streetAt) {
     const geo = new THREE.CylinderGeometry(0.03, 0.03, 3.1, 6);
     geo.translate(0, 1.55, 0);
     const inst = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ color: '#9aa0a3', roughness: 0.5, metalness: 0.6 }), postList.length);
-    postList.forEach(([x, y], i) => inst.setMatrixAt(i, m.makeTranslation(x, 0, -y)));
+    postList.forEach(([x, y], i) => inst.setMatrixAt(i, m.makeTranslation(x, ground(x, y), -y)));
     inst.castShadow = true;
     inst.computeBoundingSphere();
     group.add(inst);

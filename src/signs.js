@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ground } from './builders.js';
 
 // Storefront fascia signs with the business's real name, plus ground-floor glazing beneath.
 // Chains use their known brand colours; others get a generic colour by kind (flagged as such).
@@ -92,7 +93,8 @@ export function buildSigns(signs, renderer) {
       const ox = s.x + s.nx * 0.09, oy = s.y + s.ny * 0.09;
       const hw = s.w / 2;
       const L = [ox - tx * hw, oy - ty * hw], R = [ox + tx * hw, oy + ty * hw];
-      const y0 = SIGN_BOTTOM, y1 = SIGN_BOTTOM + SIGN_H;
+      const g0 = ground(s.x, s.y);
+      const y0 = g0 + SIGN_BOTTOM, y1 = g0 + SIGN_BOTTOM + SIGN_H;
       const quad = [
         [L, y0, u0, v0], [R, y0, u1, v0], [R, y1, u1, v1],
         [L, y0, u0, v0], [R, y1, u1, v1], [L, y1, u0, v1],
@@ -126,14 +128,15 @@ export function buildSigns(signs, renderer) {
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0), c = new THREE.Color();
   signs.forEach((s, i) => {
+    const g0 = ground(s.x, s.y);
     q.setFromAxisAngle(up, Math.atan2(s.nx, -s.ny));
-    m.compose(p.set(s.x + s.nx * 0.045, SIGN_BOTTOM + SIGN_H / 2, -(s.y + s.ny * 0.045)), q, sc.set(s.w + 0.06, SIGN_H + 0.06, 0.09));
+    m.compose(p.set(s.x + s.nx * 0.045, g0 + SIGN_BOTTOM + SIGN_H / 2, -(s.y + s.ny * 0.045)), q, sc.set(s.w + 0.06, SIGN_H + 0.06, 0.09));
     boards.setMatrixAt(i, m);
     boards.setColorAt(i, c.set(signStyle(s).bg));
     const gw = s.w + 0.6;
-    m.compose(p.set(s.x + s.nx * 0.03, 0.35 + (GLAZING_TOP - 0.35) / 2, -(s.y + s.ny * 0.03)), q, sc.set(gw, GLAZING_TOP - 0.35, 1));
+    m.compose(p.set(s.x + s.nx * 0.03, g0 + 0.35 + (GLAZING_TOP - 0.35) / 2, -(s.y + s.ny * 0.03)), q, sc.set(gw, GLAZING_TOP - 0.35, 1));
     glazing.setMatrixAt(i, m);
-    m.compose(p.set(s.x + s.nx * 0.02, 0.35 + (GLAZING_TOP - 0.35) / 2, -(s.y + s.ny * 0.02)), q, sc.set(gw + 0.25, GLAZING_TOP - 0.2, 0.04));
+    m.compose(p.set(s.x + s.nx * 0.02, g0 + 0.35 + (GLAZING_TOP - 0.35) / 2, -(s.y + s.ny * 0.02)), q, sc.set(gw + 0.25, GLAZING_TOP - 0.2, 0.04));
     frames.setMatrixAt(i, m);
   });
   for (const mesh of [boards, glazing, frames]) {

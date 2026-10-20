@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { signStyle } from './signs.js';
 import { FURNITURE_HEIGHT } from './furniture.js';
+import { ground } from './builders.js';
 
 const PROP_CLASS = {
   1: 'Vacant land', 2: 'Residential (1–4 units)', '4A': 'Commercial', '4B': 'Industrial', '4C': 'Apartments (5+ units)',
@@ -58,13 +59,13 @@ export class Inspector {
     const o = camera.position;
     for (let t = 0.5; t < 250; t += 0.4) {
       const x = o.x + this.dir.x * t, y = o.y + this.dir.y * t, z = o.z + this.dir.z * t;
-      if (y < 0) return null;
+      if (y < ground(x, -z) - 0.05) return null;
       const n = -z;
       for (const f of this.furniture.get(`${Math.floor(x / CELL)},${Math.floor(n / CELL)}`) || []) {
-        if (y <= FURNITURE_HEIGHT[f.k] && Math.hypot(f.x - x, f.y - n) < (FURNITURE_RADIUS[f.k] || 0.35)) return { f, dist: t };
+        if (y - ground(f.x, f.y) <= FURNITURE_HEIGHT[f.k] && Math.hypot(f.x - x, f.y - n) < (FURNITURE_RADIUS[f.k] || 0.35)) return { f, dist: t };
       }
       const b = this.query.buildingAt(x, -z);
-      if (b && y <= b.h && y >= (b.mh || 0)) return { b, dist: t };
+      if (b && y <= (b._top ?? b.h) && y >= (b._base ?? 0) + (b.mh || 0)) return { b, dist: t };
     }
     return null;
   }
@@ -105,8 +106,12 @@ export class Inspector {
     if (b.n && tax.addr) rows.push(row('Name', esc(b.n), 'Overture / OSM'));
     if (tax.facility) rows.push(row('Facility', esc(tax.facility), 'Tax record'));
 
-    const hSrc = b.est === 'storeys' ? 'Estimated from storeys' : b.est ? 'Estimate (no data)' : 'LiDAR (USGS via Overture)';
-    rows.push(row('Height', `${b.h.toFixed(1)} m`, hSrc));
+    const hSrc = b.est === 'storeys' ? 'Estimated from storeys' : b.est ? 'Estimate (no data)' : b.parts ? 'LiDAR 2014 roof levels' : 'LiDAR (USGS via Overture)';
+    const top = (b._top ?? b.h) - (b._base ?? 0);
+    rows.push(row('Height', b.parts ? `${b.h.toFixed(1)} m main roof, ${top.toFixed(1)} m top` : `${b.h.toFixed(1)} m`, hSrc));
+    if (b.parts) rows.push(row('Roof levels', `${b.parts.length} raised part${b.parts.length > 1 ? 's' : ''}`, 'LiDAR 2014 (setbacks, towers, bulkheads)'));
+    if (b.lid === 'absent') rows.push(row('LiDAR', 'not in 2014 scan', 'probably built since; shape from Overture'));
+    if (b._base !== undefined && b._base !== 0) rows.push(row('Ground', `${b._base.toFixed(1)} m above sea level`, 'LiDAR terrain (NAVD88)'));
     if (tax.storeys) {
       const perFloor = (b.h - (b.mh || 0)) / Math.ceil(tax.storeys);
       const disagree = !b.est && (perFloor < 2.4 || perFloor > 6) ? 'height and storeys disagree' : '';

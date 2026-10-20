@@ -43,7 +43,7 @@ def main():
     with rasterio.open(href) as src:
         native = transform_bounds("EPSG:4326", src.crs, *BBOX, densify_pts=21)
         win = from_bounds(*native, transform=src.transform).round_offsets().round_lengths()
-        data = src.read([1, 2, 3], window=win)
+        data = src.read([1, 2, 3, 4], window=win)  # R, G, B, near-infrared
         win_transform = src.window_transform(win)
         print(f"Read {data.shape[2]}x{data.shape[1]} px from source")
 
@@ -51,22 +51,23 @@ def main():
         width = int((BBOX[2] - BBOX[0]) * 111412.84 * np.cos(np.radians(lat0)) / RES_M)
         height = int((BBOX[3] - BBOX[1]) * 111132.95 / RES_M)
         dst_transform = transform_from_bounds(*BBOX, width, height)
-        out = np.zeros((3, height, width), dtype=np.uint8)
+        out = np.zeros((4, height, width), dtype=np.uint8)
         reproject(data, out, src_transform=win_transform, src_crs=src.crs,
                   dst_transform=dst_transform, dst_crs="EPSG:4326", resampling=Resampling.bilinear)
 
     os.makedirs("data/raw", exist_ok=True)
-    profile = dict(driver="GTiff", width=width, height=height, count=3, dtype="uint8", crs="EPSG:4326",
+    profile = dict(driver="GTiff", width=width, height=height, count=4, dtype="uint8", crs="EPSG:4326",
                    transform=dst_transform, compress="deflate", tiled=True, blockxsize=512, blockysize=512)
     with rasterio.open(OUT, "w", **profile) as dst:
         dst.write(out)
         dst.update_tags(source=item["id"], datetime=item["properties"]["datetime"])
     # Plain raw dump for the Node data build (no GeoTIFF reader needed there).
     meta = {"bbox": BBOX, "width": width, "height": height, "source": item["id"], "date": item["properties"]["datetime"][:10]}
-    out.transpose(1, 2, 0).tofile("data/raw/naip.rgb")
+    out[:3].transpose(1, 2, 0).tofile("data/raw/naip.rgb")
+    out[3].tofile("data/raw/naip.nir")  # for NDVI (vegetation) checks
     with open("data/raw/naip.json", "w") as f:
         json.dump(meta, f)
-    print(f"Saved {OUT} and data/raw/naip.rgb ({width}x{height})")
+    print(f"Saved {OUT}, data/raw/naip.rgb and naip.nir ({width}x{height})")
 
 
 if __name__ == "__main__":
