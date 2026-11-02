@@ -6,3 +6,6 @@ data/raw/
 .env.local
 data/derived/
 public/data/focus/*/photos/
+
+# Personal focus areas and generated refinements
+.private/

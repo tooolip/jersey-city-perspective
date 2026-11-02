@@ -60,9 +60,9 @@ Every feature should trace back to a data source, and estimates should be flagge
   - real door positions (address points / photos);
   - hand-modelled landmarks: Colgate Clock, Newport Centre, PATH headhouses, churches.
 
-### M6: Focus areas with Mapillary 3D (in progress: `example-area`)
+### M6: Focus areas with Mapillary 3D (in progress: a local focus area)
 - Photo-match view and SfM point overlay for checking against reality.
-- Done for `example-area`:
+- Done for a local focus area:
   - street level from LiDAR plus camera tracks;
   - the Coles Street cut between stone retaining walls, with the plateaus and lofts on top;
   - measured curbs.

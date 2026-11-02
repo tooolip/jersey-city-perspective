@@ -164,7 +164,7 @@ if (lidar) {
     if (!r) continue;
     if (r.absent) {
       // Not there in 2014: keep Overture's shape, but trust the recorded storeys over a height
-      // that would make them implausibly short (e.g. [redacted address]: 7 storeys at 15.8 m).
+      // that would make them implausibly short (e.g. a 7-storey building at 15.8 m).
       b.lid = 'absent';
       lidarAbsent++;
       const st = b.tax?.storeys;
